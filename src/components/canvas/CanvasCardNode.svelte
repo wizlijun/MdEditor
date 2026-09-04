@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Handle, NodeResizer, Position, type NodeProps } from '@xyflow/svelte'
+  import { Handle, NodeResizer, Position, type NodeProps, type ResizeParams } from '@xyflow/svelte'
   import type { MediaResolver } from '@moraya/core'
   import { basename } from '../../lib/paths'
   import CanvasMarkdownPreview from './CanvasMarkdownPreview.svelte'
@@ -27,7 +27,7 @@
     onTextFlush?: (id: string, markdown: string) => void
     onTextBlur?: (id: string, markdown: string) => void
     onCompositionChange?: (composing: boolean) => void
-    onResizeEnd?: (id: string) => void
+    onResizeEnd?: (id: string, rectangle: ResizeParams) => void
   }
 
   let { id, data, selected = false }: NodeProps & { data: CanvasCardData } = $props()
@@ -62,7 +62,7 @@
   function activate(event: MouseEvent): void {
     event.stopPropagation()
     if (data.kind === 'text') data.onActivate?.(id)
-    else data.onOpen?.(id)
+    else if (data.kind === 'file' || data.kind === 'link') data.onOpen?.(id)
   }
 </script>
 
@@ -71,7 +71,7 @@
   minWidth={data.kind === 'group' ? 180 : 160}
   minHeight={data.kind === 'group' ? 120 : 100}
   color={accent ?? 'var(--accent, #4d88ff)'}
-  onResizeEnd={() => queueMicrotask(() => data.onResizeEnd?.(id))}
+  onResizeEnd={(_event, rectangle) => data.onResizeEnd?.(id, rectangle)}
 />
 
 <!-- svelte-ignore a11y_no_static_element_interactions -->
@@ -183,7 +183,11 @@
     font-weight: 650;
     text-overflow: ellipsis;
     white-space: nowrap;
+    cursor: grab;
+    pointer-events: auto;
+    user-select: none;
   }
+  .group-label:active { cursor: grabbing; }
   .group-background {
     position: absolute;
     z-index: 0;
@@ -260,6 +264,8 @@
   }
   :global(.svelte-flow__node:hover .canvas-handle),
   :global(.svelte-flow__node.selected .canvas-handle) { opacity: 1; }
+  :global(.svelte-flow__node-canvas-group .canvas-handle),
+  :global(.svelte-flow__node-canvas-group .svelte-flow__resize-control) { pointer-events: auto; }
   @media (pointer: coarse) {
     :global(.canvas-handle) {
       width: 28px;

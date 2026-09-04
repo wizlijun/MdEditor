@@ -34,6 +34,10 @@ export interface FrozenGroupMove {
   readonly nodeIds: readonly string[]
 }
 
+export interface FrozenCanvasMove {
+  readonly nodeIds: readonly string[]
+}
+
 export interface CanvasClipboardPayload {
   version: 1
   nodes: CanvasNodeEntry[]
@@ -147,17 +151,23 @@ export function isNodeContained(group: KnownCanvasNode, node: KnownCanvasNode): 
     && node.y + node.height <= group.y + group.height
 }
 
-/** Freezes group membership at pointer-down so nodes cannot jump in or out during a drag. */
-export function freezeGroupMove(document: CanvasDocument, groupId: string): FrozenGroupMove {
+/**
+ * Freezes an entire drag selection at pointer-down. Explicitly dragged nodes
+ * are always included; every dragged group additionally contributes its
+ * fully-contained descendants. The set union prevents nested/overlapping
+ * groups from applying the same delta more than once.
+ */
+export function freezeCanvasMove(
+  document: CanvasDocument,
+  draggedNodeIds: Iterable<string>,
+): FrozenCanvasMove {
   const indexes = editableNodeIndexes(document)
-  const rootIndex = indexes.get(groupId)
-  const root = rootIndex === undefined ? undefined : document.nodes[rootIndex]
-  if (!root || !isKnownCanvasNode(root) || root.type !== 'group') {
-    throw new Error(`找不到可移动的 group“${groupId}”`)
-  }
-
   const movable = document.nodes.filter(isKnownCanvasNode).filter((node) => indexes.has(node.id))
-  const included = new Set<string>([root.id])
+  const byId = new Map(movable.map((node) => [node.id, node]))
+  const included = new Set<string>()
+  for (const id of draggedNodeIds) {
+    if (byId.has(id)) included.add(id)
+  }
   const visitGroup = (group: KnownCanvasNode): void => {
     for (const candidate of movable) {
       if (included.has(candidate.id) || !isNodeContained(group, candidate)) continue
@@ -165,13 +175,25 @@ export function freezeGroupMove(document: CanvasDocument, groupId: string): Froz
       if (candidate.type === 'group') visitGroup(candidate)
     }
   }
-  visitGroup(root)
-  return { groupId, nodeIds: Array.from(included) }
+  for (const id of Array.from(included)) {
+    const node = byId.get(id)
+    if (node?.type === 'group') visitGroup(node)
+  }
+  return { nodeIds: Array.from(included) }
+}
+
+/** Freezes one group's geometric membership for commands such as ungroup. */
+export function freezeGroupMove(document: CanvasDocument, groupId: string): FrozenGroupMove {
+  const group = document.nodes.find((entry) => isKnownCanvasNode(entry) && entry.id === groupId)
+  if (!group || !isKnownCanvasNode(group) || group.type !== 'group') {
+    throw new Error(`找不到可移动的 group“${groupId}”`)
+  }
+  return { groupId, ...freezeCanvasMove(document, [groupId]) }
 }
 
 export function moveFrozenNodes(
   document: CanvasDocument,
-  frozen: FrozenGroupMove,
+  frozen: FrozenCanvasMove,
   delta: Point,
 ): CanvasDocument {
   const indexes = editableNodeIndexes(document)

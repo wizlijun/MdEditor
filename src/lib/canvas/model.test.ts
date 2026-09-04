@@ -5,6 +5,7 @@ import {
   commitNodeRectangles,
   copyCanvasSelection,
   deleteCanvasSelection,
+  freezeCanvasMove,
   freezeGroupMove,
   moveFrozenNodes,
   pasteCanvasSelection,
@@ -52,6 +53,33 @@ describe('Canvas domain model', () => {
     expect(positions).toMatchObject({
       outer: [10, -5], inside: [20, 5], boundary: [190, 175], inner: [60, 45], nested: [70, 55],
       partial: [190, 190],
+    })
+  })
+
+  it('unions explicit nodes and every selected group closure for multi-node drags', () => {
+    const document = documentFrom({
+      nodes: [
+        { id: 'left-group', type: 'group', x: 0, y: 0, width: 100, height: 100 },
+        textNode('left-child', 10, 10),
+        { id: 'right-group', type: 'group', x: 200, y: 0, width: 100, height: 100 },
+        textNode('right-child', 210, 10),
+        textNode('explicit', 400, 0),
+        textNode('untouched', 500, 0),
+      ],
+      edges: [],
+    })
+
+    const frozen = freezeCanvasMove(document, ['left-group', 'right-group', 'explicit'])
+    expect(new Set(frozen.nodeIds)).toEqual(new Set([
+      'left-group', 'left-child', 'right-group', 'right-child', 'explicit',
+    ]))
+
+    const moved = moveFrozenNodes(document, frozen, { x: 5, y: 7 })
+    const positions = Object.fromEntries(moved.nodes.filter(isKnownCanvasNode).map((node) => [node.id, [node.x, node.y]]))
+    expect(positions).toMatchObject({
+      'left-group': [5, 7], 'left-child': [15, 17],
+      'right-group': [205, 7], 'right-child': [215, 17],
+      explicit: [405, 7], untouched: [500, 0],
     })
   })
 

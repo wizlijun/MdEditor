@@ -68,6 +68,7 @@
     "opener:allow-open-url",
     "store:default",
     "clipboard-manager:default",
+    "clipboard-manager:allow-read-text",
     "clipboard-manager:allow-write-text",
     "clipboard-manager:allow-write-image",
     {

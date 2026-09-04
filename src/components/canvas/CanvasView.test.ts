@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushSync, mount, tick, unmount } from 'svelte'
 import CanvasView from './CanvasView.svelte'
 import type { Tab } from '../../lib/tabs.svelte'
+import { clearCanvasUiSessions } from '../../lib/canvas/session'
 
 const h = vi.hoisted(() => ({
   setContent: vi.fn(),
@@ -11,6 +12,8 @@ const h = vi.hoisted(() => ({
   storeSet: vi.fn(async () => {}),
   storeSave: vi.fn(async () => {}),
   invoke: vi.fn(),
+  clipboardRead: vi.fn(async () => ''),
+  clipboardWrite: vi.fn(async (_text: string) => {}),
   sotRoot: '/vault' as string | null,
   folderRoot: null as string | null,
 }))
@@ -30,14 +33,57 @@ vi.mock('../../lib/plugins/host-render-html', () => ({
   renderMarkdownInline: (markdown: string) => `<p>${markdown.replaceAll('&', '&amp;').replaceAll('<', '&lt;')}</p>`,
 }))
 vi.mock('@tauri-apps/api/core', () => ({ invoke: h.invoke }))
+vi.mock('@tauri-apps/plugin-clipboard-manager', () => ({
+  readText: h.clipboardRead,
+  writeText: h.clipboardWrite,
+}))
 vi.mock('@tauri-apps/plugin-store', () => ({
   Store: { load: vi.fn(async () => ({ get: h.storeGet, set: h.storeSet, save: h.storeSave })) },
 }))
 
 class ResizeObserverStub {
-  observe(): void {}
-  unobserve(): void {}
-  disconnect(): void {}
+  private readonly targets = new Set<Element>()
+
+  constructor(private readonly callback: ResizeObserverCallback) {}
+
+  observe(target: Element): void {
+    this.targets.add(target)
+    const element = target as HTMLElement
+    const width = Number.parseFloat(element.style.width) || 100
+    const height = Number.parseFloat(element.style.height) || 100
+    Object.defineProperties(element, {
+      offsetWidth: { configurable: true, value: width },
+      offsetHeight: { configurable: true, value: height },
+    })
+    const contentRect = {
+      x: 0, y: 0, top: 0, left: 0, right: width, bottom: height,
+      width, height, toJSON: () => ({}),
+    } as DOMRect
+    element.getBoundingClientRect = () => contentRect
+    for (const handle of element.querySelectorAll<HTMLElement>('.source, .target')) {
+      Object.defineProperties(handle, {
+        offsetWidth: { configurable: true, value: 8 },
+        offsetHeight: { configurable: true, value: 8 },
+      })
+      handle.getBoundingClientRect = () => ({
+        x: 0, y: 0, top: 0, left: 0, right: 8, bottom: 8,
+        width: 8, height: 8, toJSON: () => ({}),
+      }) as DOMRect
+    }
+    queueMicrotask(() => {
+      if (this.targets.has(target) && target.isConnected) {
+        this.callback([{ target, contentRect } as ResizeObserverEntry], this as unknown as ResizeObserver)
+      }
+    })
+  }
+
+  unobserve(target: Element): void {
+    this.targets.delete(target)
+  }
+
+  disconnect(): void {
+    this.targets.clear()
+  }
 }
 
 const SAMPLE = JSON.stringify({
@@ -67,6 +113,11 @@ describe('CanvasView', () => {
     document.body.innerHTML = ''
     h.setContent.mockClear()
     h.invoke.mockReset()
+    h.clipboardRead.mockReset()
+    h.clipboardRead.mockResolvedValue('')
+    h.clipboardWrite.mockReset()
+    h.clipboardWrite.mockResolvedValue(undefined)
+    clearCanvasUiSessions()
     h.sotRoot = '/vault'
     h.folderRoot = null
     h.storeGet.mockResolvedValue(null)
@@ -74,6 +125,7 @@ describe('CanvasView', () => {
   })
 
   afterEach(async () => {
+    await new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())))
     if (component) await unmount(component)
     component = null
     vi.restoreAllMocks()
@@ -104,6 +156,230 @@ describe('CanvasView', () => {
     expect(serialized).not.toContain('"selected"')
     expect(serialized).not.toContain('"viewport"')
     expect(JSON.parse(serialized).nodes).toHaveLength(3)
+  })
+
+  it('reactively enables undo and redo toolbar actions', async () => {
+    vi.stubGlobal('prompt', vi.fn(() => '空分组'))
+    component = mount(CanvasView as unknown as Parameters<typeof mount>[0], {
+      target: document.body,
+      props: { tab: tab() },
+    })
+    await vi.waitFor(() => expect(document.querySelector('.canvas-toolbar')).toBeTruthy())
+
+    let undo = document.querySelector('button[aria-label^="撤销"]') as HTMLButtonElement
+    let redo = document.querySelector('button[aria-label^="重做"]') as HTMLButtonElement
+    expect(undo.disabled).toBe(true)
+    expect(redo.disabled).toBe(true)
+
+    ;(Array.from(document.querySelectorAll('.canvas-toolbar > button'))
+      .find((button) => button.textContent?.includes('分组')) as HTMLButtonElement).click()
+    await tick()
+    flushSync()
+
+    undo = document.querySelector('button[aria-label^="撤销"]') as HTMLButtonElement
+    redo = document.querySelector('button[aria-label^="重做"]') as HTMLButtonElement
+    expect(undo.disabled).toBe(false)
+    expect(undo.title).toContain('创建分组节点')
+    expect(redo.disabled).toBe(true)
+
+    undo.click()
+    await tick()
+    expect(JSON.parse(h.setContent.mock.calls.at(-1)?.[1] as string).nodes).toHaveLength(2)
+    expect((document.querySelector('button[aria-label^="撤销"]') as HTMLButtonElement).disabled).toBe(true)
+    redo = document.querySelector('button[aria-label^="重做"]') as HTMLButtonElement
+    expect(redo.disabled).toBe(false)
+
+    redo.click()
+    await tick()
+    expect(JSON.parse(h.setContent.mock.calls.at(-1)?.[1] as string).nodes).toHaveLength(3)
+  })
+
+  it('creates a geometric group around the selected node', async () => {
+    vi.stubGlobal('prompt', vi.fn(() => '重点'))
+    component = mount(CanvasView as unknown as Parameters<typeof mount>[0], {
+      target: document.body,
+      props: { tab: tab() },
+    })
+    await vi.waitFor(() => expect(document.querySelectorAll('.svelte-flow__node')).toHaveLength(2))
+
+    ;(document.querySelector('[data-id="text-1"]') as HTMLElement).click()
+    await tick()
+    const addGroup = Array.from(document.querySelectorAll('.canvas-toolbar > button'))
+      .find((button) => button.textContent?.includes('分组')) as HTMLButtonElement
+    addGroup.click()
+    flushSync()
+
+    const serialized = h.setContent.mock.calls.at(-1)?.[1] as string
+    const nodes = JSON.parse(serialized).nodes as Array<Record<string, unknown>>
+    expect(nodes[0]).toMatchObject({
+      type: 'group', label: '重点', x: -36, y: -52, width: 332, height: 248,
+    })
+    expect(nodes.map((node) => node.id)).toEqual([expect.any(String), 'text-1', 'link-1'])
+  })
+
+  it('persists keyboard movement and applies group closure semantics', async () => {
+    const grouped = tab()
+    grouped.currentContent = grouped.initialContent = JSON.stringify({
+      nodes: [
+        { id: 'group-1', type: 'group', label: '分组', x: 0, y: 0, width: 300, height: 220 },
+        { id: 'inside', type: 'text', text: 'inside', x: 40, y: 50, width: 120, height: 80 },
+      ],
+      edges: [],
+    })
+    component = mount(CanvasView as unknown as Parameters<typeof mount>[0], {
+      target: document.body,
+      props: { tab: grouped },
+    })
+    await vi.waitFor(() => expect(document.querySelector('[data-id="group-1"] .group-label')).toBeTruthy())
+
+    const label = document.querySelector('[data-id="group-1"] .group-label') as HTMLElement
+    label.click()
+    await tick()
+    label.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }))
+    await tick()
+    let nodes = JSON.parse(h.setContent.mock.calls.at(-1)?.[1] as string).nodes as Array<Record<string, unknown>>
+    expect(nodes.find((node) => node.id === 'group-1')).toMatchObject({ x: 1, y: 0 })
+    expect(nodes.find((node) => node.id === 'inside')).toMatchObject({ x: 41, y: 50 })
+
+    label.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', shiftKey: true, bubbles: true }))
+    await tick()
+    nodes = JSON.parse(h.setContent.mock.calls.at(-1)?.[1] as string).nodes as Array<Record<string, unknown>>
+    expect(nodes.find((node) => node.id === 'group-1')).toMatchObject({ x: 1, y: 10 })
+    expect(nodes.find((node) => node.id === 'inside')).toMatchObject({ x: 41, y: 60 })
+  })
+
+  it('renames, styles, clears and ungroups while preserving contained nodes', async () => {
+    h.invoke.mockResolvedValue(Uint8Array.from([1, 137, 80, 78, 71]).buffer)
+    vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:group-background')
+    vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {})
+    const grouped = tab()
+    grouped.currentContent = grouped.initialContent = JSON.stringify({
+      nodes: [
+        { id: 'group-1', type: 'group', label: '旧名称', background: 'assets/bg.png', x: 0, y: 0, width: 300, height: 220 },
+        { id: 'inside', type: 'text', text: 'inside', x: 40, y: 50, width: 120, height: 80 },
+      ],
+      edges: [],
+    })
+    component = mount(CanvasView as unknown as Parameters<typeof mount>[0], {
+      target: document.body,
+      props: { tab: grouped },
+    })
+    await vi.waitFor(() => expect(document.querySelector('[data-id="group-1"] .group-label')).toBeTruthy())
+    ;(document.querySelector('[data-id="group-1"] .group-label') as HTMLElement).click()
+    await tick()
+
+    const name = document.querySelector('.group-name-label input') as HTMLInputElement
+    name.value = '新名称'
+    name.dispatchEvent(new Event('change', { bubbles: true }))
+    await tick()
+    expect(JSON.parse(h.setContent.mock.calls.at(-1)?.[1] as string).nodes[0]).toMatchObject({ label: '新名称' })
+
+    const style = document.querySelector('.group-style-label select') as HTMLSelectElement
+    style.value = 'cover'
+    style.dispatchEvent(new Event('change', { bubbles: true }))
+    await tick()
+    expect(JSON.parse(h.setContent.mock.calls.at(-1)?.[1] as string).nodes[0]).toMatchObject({ backgroundStyle: 'cover' })
+
+    ;(document.querySelector('button[title="移除分组背景图片"]') as HTMLButtonElement).click()
+    await tick()
+    let saved = JSON.parse(h.setContent.mock.calls.at(-1)?.[1] as string)
+    expect(saved.nodes[0]).not.toHaveProperty('background')
+    expect(saved.nodes[0]).not.toHaveProperty('backgroundStyle')
+
+    ;(document.querySelector('button[title="移除分组边框并保留其中节点"]') as HTMLButtonElement).click()
+    await tick()
+    saved = JSON.parse(h.setContent.mock.calls.at(-1)?.[1] as string)
+    expect(saved.nodes).toEqual([expect.objectContaining({ id: 'inside', text: 'inside' })])
+    expect((document.querySelector('button[aria-label^="撤销"]') as HTMLButtonElement).title).toContain('解散分组')
+  })
+
+  it('exposes working edge label, end, color and reconnect controls', async () => {
+    component = mount(CanvasView as unknown as Parameters<typeof mount>[0], {
+      target: document.body,
+      props: { tab: tab() },
+    })
+    await vi.waitFor(() => expect(document.querySelector('.svelte-flow__edge[data-id="edge-1"]')).toBeTruthy())
+    ;(document.querySelector('.svelte-flow__edge[data-id="edge-1"]') as SVGGElement)
+      .dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    await tick()
+    flushSync()
+
+    expect(document.querySelectorAll('.canvas-edge-reconnect')).toHaveLength(2)
+    const fromEnd = document.querySelector('button[title="切换连线起点箭头"]') as HTMLButtonElement
+    const toEnd = document.querySelector('button[title="切换连线终点箭头"]') as HTMLButtonElement
+    expect(fromEnd.getAttribute('aria-pressed')).toBe('false')
+    expect(toEnd.getAttribute('aria-pressed')).toBe('true')
+    fromEnd.click()
+    await tick()
+    toEnd.click()
+    await tick()
+
+    ;(document.querySelector('button[title="连线颜色 3"]') as HTMLButtonElement).click()
+    await tick()
+    const label = document.querySelector('.edge-label input') as HTMLInputElement
+    label.value = '更新标签'
+    label.dispatchEvent(new Event('change', { bubbles: true }))
+    await tick()
+
+    const edge = JSON.parse(h.setContent.mock.calls.at(-1)?.[1] as string).edges[0]
+    expect(edge).toMatchObject({ fromEnd: 'arrow', toEnd: 'none', color: '3', label: '更新标签' })
+  })
+
+  it('keeps desktop clipboard buttons functional through the Tauri fallback', async () => {
+    vi.spyOn(navigator.clipboard, 'writeText').mockRejectedValue(new Error('Web clipboard denied'))
+    vi.spyOn(navigator.clipboard, 'readText').mockRejectedValue(new Error('Web clipboard denied'))
+    component = mount(CanvasView as unknown as Parameters<typeof mount>[0], {
+      target: document.body,
+      props: { tab: tab() },
+    })
+    await vi.waitFor(() => expect(document.querySelector('[data-id="text-1"]')).toBeTruthy())
+    ;(document.querySelector('[data-id="text-1"]') as HTMLElement).click()
+    await tick()
+
+    const copy = document.querySelector('button[title="复制选中内容"]') as HTMLButtonElement
+    expect(copy.disabled).toBe(false)
+    copy.click()
+    await vi.waitFor(() => expect(h.clipboardWrite).toHaveBeenCalledOnce())
+    expect(JSON.parse(h.clipboardWrite.mock.calls[0][0]).nodes).toEqual([
+      expect.objectContaining({ id: 'text-1', type: 'text' }),
+    ])
+
+    h.clipboardRead.mockResolvedValue('https://example.org/from-clipboard')
+    ;(document.querySelector('button[title="粘贴"]') as HTMLButtonElement).click()
+    await vi.waitFor(() => {
+      const saved = JSON.parse(h.setContent.mock.calls.at(-1)?.[1] as string)
+      expect(saved.nodes).toEqual(expect.arrayContaining([
+        expect.objectContaining({ type: 'link', url: 'https://example.org/from-clipboard' }),
+      ]))
+    })
+  })
+
+  it('creates a text card by double-clicking the pane and zooms from the visible Flow control', async () => {
+    vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockReturnValue(800)
+    vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockReturnValue(600)
+    component = mount(CanvasView as unknown as Parameters<typeof mount>[0], {
+      target: document.body,
+      props: { tab: tab() },
+    })
+    await vi.waitFor(() => expect(document.querySelector('.svelte-flow__pane')).toBeTruthy())
+
+    const pane = document.querySelector('.svelte-flow__pane') as HTMLElement
+    pane.dispatchEvent(new MouseEvent('dblclick', { bubbles: true, clientX: 250, clientY: 220 }))
+    await tick()
+    expect(JSON.parse(h.setContent.mock.calls.at(-1)?.[1] as string).nodes).toHaveLength(3)
+
+    const viewport = document.querySelector('.svelte-flow__viewport') as HTMLElement
+    const before = viewport.style.transform
+    const zoomIn = document.querySelector('.svelte-flow__controls-zoomin') as HTMLButtonElement
+    const zoomOut = document.querySelector('.svelte-flow__controls-zoomout') as HTMLButtonElement
+    const fitView = document.querySelector('.svelte-flow__controls-fitview') as HTMLButtonElement
+    expect(zoomIn.disabled).toBe(false)
+    expect(zoomOut.disabled).toBe(false)
+    expect(fitView.disabled).toBe(false)
+    zoomIn.click()
+    await vi.waitFor(() => expect(viewport.style.transform).not.toBe(before))
+    zoomOut.click()
+    fitView.click()
   })
 
   it('fails closed for malformed JSON and never rewrites the tab', async () => {

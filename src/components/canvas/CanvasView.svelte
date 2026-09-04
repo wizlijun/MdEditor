@@ -12,6 +12,7 @@
     type Edge,
     type Node,
     type OnReconnect,
+    type ResizeParams,
     type Viewport,
   } from '@xyflow/svelte'
   import '@xyflow/svelte/dist/style.css'
@@ -32,6 +33,7 @@
     deleteCanvasSelection,
     encodeJsonCanvas,
     flowConnectionToCanvasEdge,
+    freezeCanvasMove,
     freezeGroupMove,
     insertCanvasEdge,
     insertCanvasNode,
@@ -47,14 +49,18 @@
     reorderCanvasNodes,
     resolveCanvasResource,
     updateCanvasNode,
+    updateCanvasEdge,
     type CanvasClipboardPayload,
     type CanvasDocument,
     type CanvasEdge,
+    type CanvasEnd,
     type Diagnostic,
-    type FrozenGroupMove,
+    type FrozenCanvasMove,
+    type GroupBackgroundStyle,
     type KnownCanvasNode,
   } from '../../lib/canvas'
   import CanvasCardNode from './CanvasCardNode.svelte'
+  import CanvasEdgeView from './CanvasEdge.svelte'
   import { loadCanvasViewport, saveCanvasViewport } from './canvas-view-state'
 
   let { tab }: { tab: Tab } = $props()
@@ -69,6 +75,7 @@
     'canvas-group': CanvasCardNode,
     'canvas-diagnostic': CanvasCardNode,
   }
+  const edgeTypes = { 'canvas-edge': CanvasEdgeView }
 
   function initialTabContent(): string { return tab.currentContent }
   function initialTabPath(): string { return tab.filePath }
@@ -93,13 +100,22 @@
   let viewportReady = $state(false)
   let hasStoredViewport = $state(false)
   let viewportTimer: ReturnType<typeof setTimeout> | null = null
-  let groupDrag: { frozen: FrozenGroupMove; origin: { x: number; y: number } } | null = null
+  let nodeDrag: {
+    frozen: FrozenCanvasMove
+    origin: { x: number; y: number }
+    hasGroup: boolean
+  } | null = null
   let pasteCount = 0
   let resourceSession: CanvasResourceSession | null = null
   let resourceSessionRoot = ''
   const requestedImages = new Set<string>()
   const uiSession = acquireCanvasUiSession(initialTabId(), initialTabContent())
   const history = uiSession.history
+
+  let canUndo = $derived.by(() => { historyVersion; return history.canUndo })
+  let canRedo = $derived.by(() => { historyVersion; return history.canRedo })
+  let undoTitle = $derived.by(() => { historyVersion; return history.undoLabel ? `撤销：${history.undoLabel}` : '撤销' })
+  let redoTitle = $derived.by(() => { historyVersion; return history.redoLabel ? `重做：${history.redoLabel}` : '重做' })
 
   let selectedEdge = $derived.by(() => {
     historyVersion
@@ -209,6 +225,8 @@
       return {
         ...node,
         selected: selectedNodeIds.has(node.id),
+        class: kind === 'group' ? 'canvas-group-shell' : undefined,
+        dragHandle: kind === 'group' ? '.group-label' : undefined,
         data: {
           ...node.data,
           kind,
@@ -234,6 +252,7 @@
       const color = displayColor(edge.data.colorToken)
       return {
         ...edge,
+        type: 'canvas-edge',
         selected: selectedEdgeIds.has(edge.id),
         markerStart: edge.markerStart ? { type: MarkerType.ArrowClosed } : undefined,
         markerEnd: edge.markerEnd ? { type: MarkerType.ArrowClosed } : undefined,
@@ -320,13 +339,23 @@
     const selected = selectedKnownNode
     try {
       const { open } = await import('@tauri-apps/plugin-dialog')
-      const picked = await open({ multiple: false })
+      const picked = await open({
+        multiple: false,
+        ...(selected.type === 'group' ? {
+          filters: [{ name: '图片', extensions: ['avif', 'bmp', 'gif', 'heic', 'heif', 'ico', 'jpg', 'jpeg', 'png', 'webp'] }],
+        } : {}),
+      })
       if (typeof picked !== 'string' || !finishTextBeforeStructure()) return
       const imported = await importCanvasResource(resourceRoot(), tab.filePath, picked)
       const id = selected.id
       const next = updateCanvasNode(canvasDoc, id, (node) => {
         if (node.type === 'file') return { ...node, file: imported.relativePath }
-        if (node.type === 'group') return { ...node, background: imported.relativePath }
+        if (node.type === 'group') {
+          const copy = { ...node, background: imported.relativePath }
+          copy.preservedInvalid.delete('background')
+          copy.optionalPresence.add('background')
+          return copy
+        }
         return node
       })
       commitDocument(selected.type === 'file' ? '重新链接文件' : '设置分组背景', next)
@@ -450,37 +479,40 @@
     }
   }
 
-  function commitResize(id: string): void {
+  function commitResize(id: string, rectangle: ResizeParams): void {
     if (!canvasDoc) return
-    const flowNode = flowNodes.find((node) => node.id === id)
     const current = canvasDoc.nodes.find((entry) => isKnownCanvasNode(entry) && entry.id === id)
-    if (!flowNode || !current || !isKnownCanvasNode(current)) return
-    const width = flowNode.width ?? flowNode.measured?.width ?? current.width
-    const height = flowNode.height ?? flowNode.measured?.height ?? current.height
+    if (!current || !isKnownCanvasNode(current)) return
     const next = updateCanvasNode(canvasDoc, id, (node) => ({
       ...node,
-      x: Math.round(flowNode.position.x),
-      y: Math.round(flowNode.position.y),
-      width: Math.max(node.type === 'group' ? 180 : 160, Math.round(width)),
-      height: Math.max(node.type === 'group' ? 120 : 100, Math.round(height)),
+      x: Math.round(rectangle.x),
+      y: Math.round(rectangle.y),
+      width: Math.max(node.type === 'group' ? 180 : 160, Math.round(rectangle.width)),
+      height: Math.max(node.type === 'group' ? 120 : 100, Math.round(rectangle.height)),
     }))
     commitDocument('调整节点大小', next)
   }
 
-  function handleNodeDragStart({ targetNode }: { targetNode: UiNode | null }): void {
+  function handleNodeDragStart({ targetNode, nodes }: { targetNode: UiNode | null; nodes: UiNode[] }): void {
     if (!canvasDoc || !targetNode) return
-    const node = canvasDoc.nodes.find((entry) => isKnownCanvasNode(entry) && entry.id === targetNode.id)
-    if (!node || !isKnownCanvasNode(node) || node.type !== 'group') { groupDrag = null; return }
-    groupDrag = { frozen: freezeGroupMove(canvasDoc, node.id), origin: { x: node.x, y: node.y } }
+    const target = canvasDoc.nodes.find((entry) => isKnownCanvasNode(entry) && entry.id === targetNode.id)
+    if (!target || !isKnownCanvasNode(target)) { nodeDrag = null; return }
+    const draggedIds = nodes.map((node) => (node.data.canonicalId as string | undefined) ?? node.id)
+    const dragged = canvasDoc.nodes.filter((entry) => isKnownCanvasNode(entry) && draggedIds.includes(entry.id))
+    nodeDrag = {
+      frozen: freezeCanvasMove(canvasDoc, draggedIds),
+      origin: { x: target.x, y: target.y },
+      hasGroup: dragged.some((node) => isKnownCanvasNode(node) && node.type === 'group'),
+    }
   }
 
   function handleNodeDrag({ targetNode }: { targetNode: UiNode | null }): void {
-    if (!canvasDoc || !targetNode || groupDrag?.frozen.groupId !== targetNode.id) return
-    const dx = targetNode.position.x - groupDrag.origin.x
-    const dy = targetNode.position.y - groupDrag.origin.y
-    const moving = new Set(groupDrag.frozen.nodeIds)
+    if (!canvasDoc || !targetNode || !nodeDrag) return
+    const dx = targetNode.position.x - nodeDrag.origin.x
+    const dy = targetNode.position.y - nodeDrag.origin.y
+    const moving = new Set(nodeDrag.frozen.nodeIds)
     flowNodes = flowNodes.map((flowNode) => {
-      if (flowNode.id === targetNode.id || !moving.has(flowNode.id)) return flowNode
+      if (!moving.has(flowNode.id)) return flowNode
       const canonical = canvasDoc?.nodes.find((entry) => isKnownCanvasNode(entry) && entry.id === flowNode.id)
       if (!canonical || !isKnownCanvasNode(canonical)) return flowNode
       return { ...flowNode, position: { x: canonical.x + dx, y: canonical.y + dy } }
@@ -489,17 +521,21 @@
 
   function handleNodeDragStop({ targetNode, nodes }: { targetNode: UiNode | null; nodes: UiNode[] }): void {
     if (!canvasDoc) return
-    if (!finishTextBeforeStructure()) { rebuildFlow(); return }
-    if (targetNode && groupDrag?.frozen.groupId === targetNode.id) {
-      const next = moveFrozenNodes(canvasDoc, groupDrag.frozen, {
-        x: targetNode.position.x - groupDrag.origin.x,
-        y: targetNode.position.y - groupDrag.origin.y,
+    if (!finishTextBeforeStructure()) { nodeDrag = null; rebuildFlow(); return }
+    if (targetNode && nodeDrag) {
+      const drag = nodeDrag
+      const next = moveFrozenNodes(canvasDoc, drag.frozen, {
+        x: targetNode.position.x - drag.origin.x,
+        y: targetNode.position.y - drag.origin.y,
       })
-      groupDrag = null
-      commitDocument('移动分组', next)
+      nodeDrag = null
+      const label = drag.hasGroup
+        ? (nodes.length > 1 ? '移动分组与选区' : '移动分组')
+        : (nodes.length > 1 ? '移动多个节点' : '移动节点')
+      commitDocument(label, next)
       return
     }
-    groupDrag = null
+    nodeDrag = null
     let next = canvasDoc
     for (const node of nodes) {
       next = updateCanvasNode(next, node.id, (current) => ({
@@ -561,7 +597,19 @@
       presence: { nodes: true, edges: true },
     })
     rememberCanvasClipboard(payload, text)
-    try { await navigator.clipboard?.writeText(text) } catch { /* in-process clipboard remains valid */ }
+    let wroteSystemClipboard = false
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(text)
+        wroteSystemClipboard = true
+      }
+    } catch { /* try the Tauri clipboard below */ }
+    if (!wroteSystemClipboard) {
+      try {
+        const { writeText } = await import('@tauri-apps/plugin-clipboard-manager')
+        await writeText(text)
+      } catch { /* in-process clipboard remains valid */ }
+    }
     return true
   }
 
@@ -570,15 +618,22 @@
   }
 
   async function pasteFromClipboard(): Promise<void> {
+    let text = ''
     try {
-      const text = await navigator.clipboard?.readText()
-      if (text?.trim()) {
-        const remembered = recallCanvasClipboard(text)
-        if (remembered) pastePayload(remembered)
-        else pasteText(text)
-        return
-      }
-    } catch { /* fall back to the in-process Canvas clipboard */ }
+      text = await navigator.clipboard?.readText?.() ?? ''
+    } catch { /* try the Tauri clipboard below */ }
+    if (!text.trim()) {
+      try {
+        const { readText } = await import('@tauri-apps/plugin-clipboard-manager')
+        text = await readText()
+      } catch { /* fall back to the in-process Canvas clipboard */ }
+    }
+    if (text.trim()) {
+      const remembered = recallCanvasClipboard(text)
+      if (remembered) pastePayload(remembered)
+      else pasteText(text)
+      return
+    }
     const remembered = recallCanvasClipboard()
     if (remembered) pastePayload(remembered)
   }
@@ -664,7 +719,15 @@
   }
 
   function handleKeydown(event: KeyboardEvent): void {
-    if (event.isComposing || composing || isTextInput(event.target)) return
+    if (event.isComposing || composing) return
+    if (isTextInput(event.target)) {
+      if (event.key === 'Escape' && activeTextId) {
+        event.preventDefault()
+        event.stopPropagation()
+        ;(event.target as HTMLElement).blur()
+      }
+      return
+    }
     const mod = event.metaKey || event.ctrlKey
     const key = event.key.toLowerCase()
     if (mod && key === 'z') { event.preventDefault(); event.stopPropagation(); event.shiftKey ? redo() : undo(); return }
@@ -679,6 +742,19 @@
     if (event.key === 'Backspace' || event.key === 'Delete') {
       event.preventDefault(); event.stopPropagation(); deleteSelection(); return
     }
+    if (!mod && !event.altKey && selectedNodeIds.size > 0 && ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(event.key)) {
+      event.preventDefault()
+      event.stopPropagation()
+      if (!canvasDoc || !finishTextBeforeStructure()) return
+      const step = event.shiftKey ? 10 : 1
+      const delta = {
+        x: event.key === 'ArrowLeft' ? -step : event.key === 'ArrowRight' ? step : 0,
+        y: event.key === 'ArrowUp' ? -step : event.key === 'ArrowDown' ? step : 0,
+      }
+      const frozen = freezeCanvasMove(canvasDoc, selectedNodeIds)
+      commitDocument('移动选中节点', moveFrozenNodes(canvasDoc, frozen, delta))
+      return
+    }
     if (event.key === 'Enter' && selectedNodeIds.size === 1) {
       event.preventDefault(); event.stopPropagation()
       const id = Array.from(selectedNodeIds)[0]
@@ -688,6 +764,14 @@
       return
     }
     if (event.key === 'Escape') finalizeTextSession()
+  }
+
+  function handleSurfaceDoubleClick(event: MouseEvent): void {
+    const target = event.target
+    if (!(target instanceof Element) || !target.closest('.svelte-flow__pane')) return
+    if (target.closest('.svelte-flow__node,.svelte-flow__edge,.svelte-flow__controls')) return
+    event.preventDefault()
+    addNode('text', screenToFlow({ x: event.clientX, y: event.clientY }))
   }
 
   function updateEdgeLabel(value: string): void {
@@ -701,6 +785,92 @@
     if (value.trim()) { edge.label = value; edge.optionalPresence.add('label') }
     else { delete edge.label; edge.optionalPresence.delete('label') }
     commitDocument('编辑连线标签', next)
+  }
+
+  function setEdgeEnd(field: 'fromEnd' | 'toEnd', value: CanvasEnd): void {
+    if (!canvasDoc || !selectedEdge || !finishTextBeforeStructure()) return
+    const next = updateCanvasEdge(canvasDoc, selectedEdge.id, (edge) => {
+      const copy = { ...edge, [field]: value }
+      copy.preservedInvalid.delete(field)
+      copy.optionalPresence.add(field)
+      return copy
+    })
+    commitDocument(field === 'fromEnd' ? '切换连线起点箭头' : '切换连线终点箭头', next)
+  }
+
+  function setEdgeColor(color: string | undefined): void {
+    if (!canvasDoc || !selectedEdge || !finishTextBeforeStructure()) return
+    const next = updateCanvasEdge(canvasDoc, selectedEdge.id, (edge) => {
+      const copy = { ...edge }
+      copy.preservedInvalid.delete('color')
+      if (color) { copy.color = color; copy.optionalPresence.add('color') }
+      else { delete copy.color; copy.optionalPresence.delete('color') }
+      return copy
+    })
+    commitDocument('设置连线颜色', next)
+  }
+
+  function updateGroupLabel(value: string): void {
+    if (!canvasDoc || selectedKnownNode?.type !== 'group' || !finishTextBeforeStructure()) return
+    const next = updateCanvasNode(canvasDoc, selectedKnownNode.id, (node) => {
+      if (node.type !== 'group') return node
+      const copy = { ...node, label: value }
+      copy.preservedInvalid.delete('label')
+      copy.optionalPresence.add('label')
+      return copy
+    })
+    commitDocument('重命名分组', next)
+  }
+
+  function setGroupBackgroundStyle(value: GroupBackgroundStyle): void {
+    if (!canvasDoc || selectedKnownNode?.type !== 'group' || !finishTextBeforeStructure()) return
+    const next = updateCanvasNode(canvasDoc, selectedKnownNode.id, (node) => {
+      if (node.type !== 'group') return node
+      const copy = { ...node, backgroundStyle: value }
+      copy.preservedInvalid.delete('backgroundStyle')
+      copy.optionalPresence.add('backgroundStyle')
+      return copy
+    })
+    commitDocument('设置分组背景样式', next)
+  }
+
+  function clearGroupBackground(): void {
+    if (!canvasDoc || selectedKnownNode?.type !== 'group' || !finishTextBeforeStructure()) return
+    const next = updateCanvasNode(canvasDoc, selectedKnownNode.id, (node) => {
+      if (node.type !== 'group') return node
+      const copy = { ...node }
+      delete copy.background
+      delete copy.backgroundStyle
+      copy.preservedInvalid.delete('background')
+      copy.preservedInvalid.delete('backgroundStyle')
+      copy.optionalPresence.delete('background')
+      copy.optionalPresence.delete('backgroundStyle')
+      return copy
+    })
+    commitDocument('移除分组背景', next)
+  }
+
+  function ungroupSelectedGroup(): void {
+    if (!canvasDoc || selectedKnownNode?.type !== 'group' || !finishTextBeforeStructure()) return
+    const groupId = selectedKnownNode.id
+    const members = freezeGroupMove(canvasDoc, groupId).nodeIds.filter((id) => id !== groupId)
+    const next = deleteCanvasSelection(canvasDoc, new Set([groupId]))
+    commitDocument('解散分组', next, new Set(members), new Set())
+  }
+
+  function editSelectedLink(): void {
+    if (!canvasDoc || selectedKnownNode?.type !== 'link') return
+    const current = selectedKnownNode
+    const value = window.prompt('输入 http 或 https 链接', current.url)?.trim()
+    if (!value || !finishTextBeforeStructure()) return
+    try {
+      const url = new URL(value)
+      if (url.protocol !== 'http:' && url.protocol !== 'https:') throw new Error('unsupported protocol')
+      const next = updateCanvasNode(canvasDoc, current.id, (node) => node.type === 'link' ? { ...node, url: url.href } : node)
+      commitDocument('编辑链接', next)
+    } catch {
+      showError('只支持 http:// 或 https:// 链接。')
+    }
   }
 
   function setNodeColor(color: string | undefined): void {
@@ -792,6 +962,7 @@
     window.addEventListener('notemd:canvas-view-command', handleViewCommand)
     return () => {
       cancelled = true
+      nodeDrag = null
       if (viewportTimer) clearTimeout(viewportTimer)
       resourceSession?.dispose()
       resourceSession = null
@@ -820,6 +991,7 @@
     observedTabContent = incoming
     const decoded = decodeJsonCanvas(incoming)
     if (!decoded.ok) {
+      nodeDrag = null
       parseFailure = decoded.diagnostics
       diagnostics = decoded.diagnostics
       return
@@ -827,6 +999,7 @@
     activeTextId = null
     textBefore = null
     composing = false
+    nodeDrag = null
     if (!preserveHistory) history.clear()
     historyVersion++
     canvasDoc = decoded.document
@@ -853,7 +1026,8 @@
   role="application"
   aria-label={`无限画布：${tab.title}`}
   tabindex="0"
-  onkeydown={handleKeydown}
+  onkeydowncapture={handleKeydown}
+  ondblclick={handleSurfaceDoubleClick}
   onpaste={handlePaste}
 >
   {#if parseFailure}
@@ -877,14 +1051,14 @@
           onclick={() => { touchSelectionMode = !touchSelectionMode }}
           title="切换平移或框选"
         >{touchSelectionMode ? '框选' : '平移'}</button>
-        <button onclick={() => void copySelection()} disabled={selectedNodeIds.size === 0} title="复制选中内容">复制</button>
-        <button onclick={() => void cutSelection()} disabled={selectedNodeIds.size === 0} title="剪切选中内容">剪切</button>
-        <button onclick={() => void pasteFromClipboard()} title="粘贴">粘贴</button>
       {/if}
+      <button onclick={() => void copySelection()} disabled={selectedNodeIds.size === 0} title="复制选中内容">复制</button>
+      <button onclick={() => void cutSelection()} disabled={selectedNodeIds.size === 0} title="剪切选中内容">剪切</button>
+      <button onclick={() => void pasteFromClipboard()} title="粘贴">粘贴</button>
       <span class="toolbar-separator"></span>
-      <button onclick={undo} disabled={!history.canUndo} title={history.undoLabel ? `撤销：${history.undoLabel}` : '撤销'}>↶</button>
-      <button onclick={redo} disabled={!history.canRedo} title={history.redoLabel ? `重做：${history.redoLabel}` : '重做'}>↷</button>
-      <button onclick={deleteSelection} disabled={selectedNodeIds.size + selectedEdgeIds.size === 0} title="删除选中内容">⌫</button>
+      <button onclick={undo} disabled={!canUndo} title={undoTitle} aria-label={undoTitle}>↶</button>
+      <button onclick={redo} disabled={!canRedo} title={redoTitle} aria-label={redoTitle}>↷</button>
+      <button onclick={deleteSelection} disabled={selectedNodeIds.size + selectedEdgeIds.size === 0} title="删除选中内容" aria-label="删除选中内容">⌫</button>
       {#if selectedNodeIds.size > 0}
         <button onclick={() => changeLayer('front')} title="移至最上层">置顶</button>
         <button onclick={() => changeLayer('back')} title="移至最下层">置底</button>
@@ -900,12 +1074,64 @@
             onkeydown={(event) => event.stopPropagation()}
           />
         </label>
+        <button
+          class:tool-active={(selectedEdge.fromEnd ?? 'none') === 'arrow'}
+          aria-pressed={(selectedEdge.fromEnd ?? 'none') === 'arrow'}
+          onclick={() => setEdgeEnd('fromEnd', (selectedEdge?.fromEnd ?? 'none') === 'arrow' ? 'none' : 'arrow')}
+          title="切换连线起点箭头"
+        >起点箭头</button>
+        <button
+          class:tool-active={(selectedEdge.toEnd ?? 'arrow') === 'arrow'}
+          aria-pressed={(selectedEdge.toEnd ?? 'arrow') === 'arrow'}
+          onclick={() => setEdgeEnd('toEnd', (selectedEdge?.toEnd ?? 'arrow') === 'arrow' ? 'none' : 'arrow')}
+          title="切换连线终点箭头"
+        >终点箭头</button>
+        <div class="color-row" aria-label="连线颜色">
+          {#each [undefined, '1', '2', '3', '4', '5', '6'] as color}
+            <button
+              class="color-swatch"
+              class:selected={selectedEdge.color === color}
+              style:--swatch={displayColor(color) ?? 'CanvasText'}
+              title={color ? `连线颜色 ${color}` : '默认连线颜色'}
+              onclick={() => setEdgeColor(color)}
+            ><span class="sr-only">{color ?? '默认'}</span></button>
+          {/each}
+        </div>
       {:else if selectedKnownNode}
         <span class="toolbar-separator"></span>
         {#if selectedKnownNode.type === 'file'}
           <button onclick={() => void relinkSelectedResource()} title="重新选择并导入文件">重新链接</button>
+        {:else if selectedKnownNode.type === 'link'}
+          <button onclick={editSelectedLink} title="编辑链接地址">编辑链接</button>
         {:else if selectedKnownNode.type === 'group'}
           <button onclick={() => void relinkSelectedResource()} title="选择并导入分组背景图片">设置背景</button>
+          {#if selectedKnownNode.background || selectedKnownNode.preservedInvalid.has('background')}
+            <button onclick={clearGroupBackground} title="移除分组背景图片">移除背景</button>
+          {/if}
+          <label class="group-name-label">
+            分组名称
+            <input
+              value={selectedKnownNode.label ?? ''}
+              placeholder="分组"
+              onchange={(event) => updateGroupLabel(event.currentTarget.value)}
+              onkeydown={(event) => event.stopPropagation()}
+            />
+          </label>
+          {#if selectedKnownNode.background}
+            <label class="group-style-label">
+              背景
+              <select
+                value={selectedKnownNode.backgroundStyle ?? 'ratio'}
+                onchange={(event) => setGroupBackgroundStyle(event.currentTarget.value as GroupBackgroundStyle)}
+                onkeydown={(event) => event.stopPropagation()}
+              >
+                <option value="ratio">完整显示</option>
+                <option value="cover">铺满</option>
+                <option value="repeat">平铺</option>
+              </select>
+            </label>
+          {/if}
+          <button onclick={ungroupSelectedGroup} title="移除分组边框并保留其中节点">解组</button>
         {/if}
         <div class="color-row" aria-label="节点颜色">
           {#each [undefined, '1', '2', '3', '4', '5', '6'] as color}
@@ -926,6 +1152,7 @@
       bind:edges={flowEdges}
       bind:viewport
       {nodeTypes}
+      {edgeTypes}
       fitView={!hasStoredViewport}
       fitViewOptions={{ padding: 0.2, maxZoom: 1.25 }}
       nodeOrigin={[0, 0]}
@@ -990,6 +1217,7 @@
     border: 0;
     background: transparent;
   }
+  .canvas-surface :global(.svelte-flow__node.canvas-group-shell) { pointer-events: none; }
   .canvas-surface :global(.svelte-flow__node.selected .canvas-card) {
     outline: 2px solid var(--accent, #4d88ff);
     outline-offset: 2px;
@@ -997,6 +1225,13 @@
   .canvas-surface :global(.svelte-flow__edge.selected path) {
     stroke: var(--accent, #4d88ff);
     stroke-width: 3;
+  }
+  .canvas-surface :global(.canvas-edge-reconnect) {
+    border: 2px solid Canvas;
+    border-radius: 999px;
+    background: var(--accent, #4d88ff);
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.24);
+    cursor: crosshair;
   }
   .canvas-toolbar {
     position: absolute;
@@ -1033,8 +1268,15 @@
   .canvas-toolbar > button.tool-active { background: var(--accent, #4d88ff); color: white; }
   .canvas-toolbar > button:disabled { opacity: 0.32; cursor: default; }
   .toolbar-separator { flex: 0 0 1px; align-self: stretch; margin: 3px; background: color-mix(in srgb, CanvasText 13%, transparent); }
-  .edge-label { display: flex; align-items: center; gap: 6px; padding: 0 5px; font-size: 11px; white-space: nowrap; }
-  .edge-label input {
+  .edge-label, .group-name-label, .group-style-label {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 0 5px;
+    font-size: 11px;
+    white-space: nowrap;
+  }
+  .edge-label input, .group-name-label input, .group-style-label select {
     width: 112px;
     padding: 5px 7px;
     border: 1px solid color-mix(in srgb, CanvasText 16%, transparent);
@@ -1043,6 +1285,8 @@
     color: CanvasText;
     font: inherit;
   }
+  .group-name-label input { width: 90px; }
+  .group-style-label select { width: auto; }
   .color-row { display: flex; align-items: center; gap: 3px; padding: 0 3px; }
   .color-swatch {
     width: 22px;
@@ -1095,11 +1339,26 @@
     }
     .canvas-toolbar > button { min-height: 44px; padding-inline: 12px; }
     .color-swatch { width: 44px; min-height: 44px; }
+  }
+  @media (pointer: coarse) {
+    .canvas-toolbar > button { min-height: 44px; padding-inline: 12px; }
+    .color-swatch { width: 44px; min-height: 44px; }
     .canvas-surface :global(.svelte-flow__resize-control.handle) {
       width: 28px;
       height: 28px;
       border: 0;
       background: radial-gradient(circle, var(--accent, #4d88ff) 0 5px, transparent 6px);
+    }
+    .canvas-surface :global(.canvas-edge-reconnect) {
+      width: 32px !important;
+      height: 32px !important;
+      border: 0;
+      background: radial-gradient(circle, var(--accent, #4d88ff) 0 6px, transparent 7px);
+      box-shadow: none;
+    }
+    .canvas-surface :global(.svelte-flow__controls-button) {
+      width: 44px;
+      height: 44px;
     }
   }
 </style>
