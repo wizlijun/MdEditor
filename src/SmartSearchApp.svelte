@@ -476,6 +476,7 @@
   function readableError(error: unknown): string {
     let message = error instanceof Error ? error.message : String(error)
     if (error instanceof AgentTaskError && error.status === 'timeout') message = '快速模型等待超时'
+    if (error instanceof AgentTaskError && error.status === 'cancelled') message = '快速模型运行已停止'
     message = message
       .replace(/\b(?:sk|key)-[A-Za-z0-9_-]{8,}\b/g, '[redacted]')
       .replace(/\bBearer\s+\S+/gi, 'Bearer [redacted]')
@@ -1247,8 +1248,8 @@
         <summary>{t('smartSearch.advancedSettings')}</summary>
         <label class="menu-row setting-row">
           <span>{t('smartSearch.plannerTimeout')}</span>
-          <input type="number" min="3" max="15" step="1" value={settings.smartLookup.planner.timeoutMs / 1_000}
-            onchange={(event) => saveBoundedSeconds(event, settings.smartLookup.planner.timeoutMs, 3, 15, (value) => { settings.smartLookup.planner.timeoutMs = value })} />
+          <input type="number" min="10" max="60" step="1" value={settings.smartLookup.planner.timeoutMs / 1_000}
+            onchange={(event) => saveBoundedSeconds(event, settings.smartLookup.planner.timeoutMs, 10, 60, (value) => { settings.smartLookup.planner.timeoutMs = value })} />
         </label>
         <label class="menu-row setting-row">
           <span>{t('smartSearch.deepTimeout')}</span>

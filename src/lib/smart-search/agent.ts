@@ -252,8 +252,14 @@ export async function pollAgentTask(
     const status = String(record.status ?? 'error')
     if (task === SEARCH_PLAN_TASK || task === SEARCH_SUMMARY_TASK) {
       if (status !== 'success') {
+        const diagnostic = String(response.terminal_result?.content || record.stderr_tail || '').trim()
+        const message = status === 'cancelled'
+          ? `${task} run was cancelled`
+          : status === 'timeout'
+            ? `${task} run timed out`
+            : diagnostic || `${task} run failed: ${status}`
         throw new AgentTaskError(
-          String(response.terminal_result?.content ?? record.stderr_tail ?? `${task} run failed: ${status}`),
+          message,
           task,
           runId,
           status,

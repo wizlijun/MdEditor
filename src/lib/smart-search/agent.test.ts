@@ -5,6 +5,7 @@ import {
   normalizeAgentHarness,
   pollAgentTask,
   startAgentTask,
+  supportsSearchPlanner,
 } from './agent'
 
 describe('smart-search agent transport', () => {
@@ -13,6 +14,29 @@ describe('smart-search agent transport', () => {
       tasks: ['search-plan'], model_routing: {},
     }})).toMatchObject({ harness: 'Third party', ok: true, capabilities: undefined })
     expect(normalizeAgentHarness({ ok: true })).toBeNull()
+  })
+
+  it('keeps a Planner available when its explicit fast profile works without a catalog default', () => {
+    const harness = normalizeAgentHarness({
+      harness: 'Codex CLI',
+      ok: true,
+      default_model: null,
+      capabilities: {
+        tasks: ['search-plan'],
+        search_plan_schemas: [1],
+        terminal_result: true,
+        input_only_isolation: true,
+        model_routing: {
+          invocation_override: true,
+          profiles: {
+            fast: { model: 'gpt-fast', available: true },
+            default: { model: null, available: false },
+          },
+          selectable_models: [],
+        },
+      },
+    })
+    expect(supportsSearchPlanner({ id: 'codex', name: 'Codex', harness })).toBe(true)
   })
 
   it('starts each task with an invocation id and an input hash', async () => {
@@ -74,7 +98,7 @@ describe('smart-search agent transport', () => {
     expect(new Set(transport.mock.calls.map((call) => call[2].run_id))).toEqual(new Set(['run-1']))
   })
 
-  it('preserves terminal timeout details as a typed error', async () => {
+  it('preserves a terminal timeout as a typed error', async () => {
     const transport = vi.fn().mockResolvedValue({
       state: 'done', record: { status: 'timeout', stderr_tail: 'quiet timeout' },
     })
@@ -83,5 +107,22 @@ describe('smart-search agent transport', () => {
     }).catch((error) => error)
     expect(failure).toBeInstanceOf(AgentTaskError)
     expect(failure).toMatchObject({ task: 'search-summary', runId: 's1', status: 'timeout' })
+    expect(failure.message).toBe('search-summary run timed out')
+  })
+
+  it('does not present non-fatal provider stderr as a cancelled Planner cause', async () => {
+    const transport = vi.fn().mockResolvedValue({
+      state: 'done',
+      record: {
+        status: 'cancelled',
+        stderr_tail: 'ERROR codex_models_manager::manager: failed to refresh available models',
+      },
+    })
+    const failure = await pollAgentTask('provider', 'search-plan', 'p1', vi.fn(), {
+      transport, intervalMs: 0,
+    }).catch((error) => error)
+    expect(failure).toBeInstanceOf(AgentTaskError)
+    expect(failure.message).toBe('search-plan run was cancelled')
+    expect(failure.message).not.toContain('codex_models_manager')
   })
 })

@@ -2,7 +2,7 @@
   "manifest_version": 2,
   "id": "notemd.codex-agent",
   "name": "Codex Agent",
-  "version": "1.0.13",
+  "version": "1.0.14",
   "kind": "native",
   "engines": {
     "notemd": ">=6.828.1"
