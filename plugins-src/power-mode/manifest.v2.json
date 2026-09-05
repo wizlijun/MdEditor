@@ -2,7 +2,7 @@
   "manifest_version": 2,
   "id": "notemd.power-mode",
   "name": "Power Mode",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "kind": "native",
   "engines": { "notemd": ">=6.828.3" },
   "description": "Cursor explosions, a combo meter and a little screen shake while you type.",

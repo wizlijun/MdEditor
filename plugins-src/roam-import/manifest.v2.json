@@ -2,7 +2,7 @@
   "manifest_version": 2,
   "id": "notemd.roam-import",
   "name": "Roam Research Import",
-  "version": "1.2.3",
+  "version": "1.2.4",
   "kind": "native",
   "binary": {
     "aarch64-apple-darwin": "bin/notemd-roam-import",

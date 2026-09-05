@@ -2,10 +2,10 @@
   "manifest_version": 2,
   "id": "notemd.memory",
   "name": "Memory",
-  "version": "2.5.1",
+  "version": "2.5.2",
   "kind": "native",
   "engines": {
-    "notemd": ">=6.904.8"
+    "notemd": ">=6.906.1"
   },
   "description": "Manage structured Memory claims and preview a local governed document where people edit directly and isolated Agents submit reviewable changes.",
   "ui": "ui/",

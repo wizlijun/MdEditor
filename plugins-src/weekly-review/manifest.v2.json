@@ -2,7 +2,7 @@
   "manifest_version": 2,
   "id": "notemd.weekly-review",
   "name": "Weekly Review",
-  "version": "1.0.4",
+  "version": "1.0.5",
   "kind": "native",
   "engines": {
     "notemd": ">=6.828.3"

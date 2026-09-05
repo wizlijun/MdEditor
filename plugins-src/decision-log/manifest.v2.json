@@ -2,7 +2,7 @@
   "manifest_version": 2,
   "id": "notemd.decision-log",
   "name": "Decision",
-  "version": "1.1.6",
+  "version": "1.1.7",
   "kind": "native",
   "engines": {
     "notemd": ">=6.828.3"
