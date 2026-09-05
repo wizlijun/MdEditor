@@ -148,7 +148,6 @@
   .toc-row.current:hover {
     background: color-mix(in srgb, var(--accent-color, #4a80d4) 18%, transparent);
     color: var(--accent-color, #3266b1);
-    box-shadow: inset 3px 0 0 var(--accent-color, #4a80d4);
   }
   .toc-row.current .marker { opacity: 1; }
   .toc-row.current .label { font-weight: 650; }

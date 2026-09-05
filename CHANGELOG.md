@@ -7,6 +7,10 @@ For the full commit history, see the git log.
 
 ## Unreleased
 
+### Changed
+
+- **The table of contents uses a cleaner current-position highlight.** The blue highlight remains easy to spot without the extra dark strip on its left edge.
+
 ## v6.905.4 — 2026-09-05
 
 ### Changed
