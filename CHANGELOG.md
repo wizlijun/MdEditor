@@ -7,6 +7,8 @@ For the full commit history, see the git log.
 
 ## Unreleased
 
+## v6.905.6 — 2026-09-05
+
 ### Changed
 
 - **Smart Lookup puts the results first.** Matching notes and the first original-text preview appear directly, with just one Open original action and a More menu for copying references, quick answers and in-depth research. The window stays a stable size, supports keyboard navigation and narrow layouts, and shows a scrollable activity history with an explicit Stop action.
