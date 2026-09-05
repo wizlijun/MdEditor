@@ -279,13 +279,13 @@ describe('SettingsDialog — Search & Index tab entry', () => {
       (candidate) => candidate.querySelector('h3')?.textContent?.trim() === 'Smart Lookup',
     )
     expect(section).toBeTruthy()
-    expect(section?.textContent).toContain('Smart understanding')
-    expect(section?.textContent).toContain('Result limit')
-    expect(section?.textContent).toContain('Quick summary')
-    expect(section?.textContent).toContain('Default handoff Agent')
+    expect(section?.textContent).toContain('Understand natural language')
+    expect(section?.textContent).toContain('Maximum results')
+    expect(section?.textContent).toContain('Quick answer')
+    expect(section?.textContent).toContain('Research assistant')
 
     const deepRow = Array.from(section!.querySelectorAll('label.row')).find(
-      (row) => row.querySelector('.lbl')?.textContent?.trim() === 'Expand automatically when empty',
+      (row) => row.querySelector('.lbl')?.textContent?.trim() === 'Search more broadly when nothing is found',
     )
     const checkbox = deepRow?.querySelector<HTMLInputElement>('input[type="checkbox"]')
     expect(checkbox?.checked).toBe(false)

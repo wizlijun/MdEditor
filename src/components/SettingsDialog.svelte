@@ -1383,7 +1383,7 @@
         <VaultSettingsTab />
       {:else if selectedTab === 'search'}
         <section class="block">
-          <h3>{t('smartSearch.lookup')}</h3>
+          <h3>{t('smartSearch.windowTitle')}</h3>
           <p class="desc">{t('smartSearch.smartUnderstandingHint')}</p>
           <label class="row">
             <span class="lbl">{t('smartSearch.smartUnderstanding')}</span>

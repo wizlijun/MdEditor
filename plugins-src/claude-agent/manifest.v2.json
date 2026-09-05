@@ -2,10 +2,10 @@
   "manifest_version": 2,
   "id": "notemd.claude-agent",
   "name": "Claude Agent",
-  "version": "1.0.29",
+  "version": "1.0.30",
   "kind": "native",
   "engines": {
-    "notemd": ">=6.828.1"
+    "notemd": ">=6.905.6"
   },
   "description": "Run Claude Code headless against your vault: task templates live in .notemd/agent-tasks, stream live in a window, or fire detached from the CLI.",
   "binary": {

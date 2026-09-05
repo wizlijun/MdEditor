@@ -950,12 +950,15 @@ pub fn notemd_smart_search(
     smart::run_smart_search_command(app, window, query, limit, deep, timeout_ms)
 }
 
-/// Extract the authoritative filters that must be shown to the isolated
-/// planner and re-applied after it responds. This parses only the supplied
-/// string and never opens the Vault or the index.
+/// Extract the authoritative filters and compute trusted local-date anchors
+/// for the isolated planner. This never opens the Vault or the index.
 #[tauri::command]
-pub fn notemd_search_plan_context(original_query: String) -> Result<plan::SearchPlanContext, String> {
-    plan::search_plan_context(&original_query)
+pub fn notemd_search_plan_context(
+    original_query: String,
+    reference_time: String,
+    timezone: String,
+) -> Result<plan::SearchPlanContext, String> {
+    plan::search_plan_context(&original_query, &reference_time, &timezone)
 }
 
 /// Validate and execute a bounded `SearchPlanV1` without accepting a command

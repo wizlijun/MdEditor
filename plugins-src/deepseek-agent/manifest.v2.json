@@ -2,10 +2,10 @@
   "manifest_version": 2,
   "id": "notemd.deepseek-agent",
   "name": "DeepSeek Agent",
-  "version": "1.1.15",
+  "version": "1.1.16",
   "kind": "native",
   "engines": {
-    "notemd": ">=6.828.1"
+    "notemd": ">=6.905.6"
   },
   "description": "Run DeepSeek Harness against your vault over the Agent Client Protocol: task templates live in .notemd/agent-tasks, stream live in a window, or fire detached from the CLI. Experimental — depends on a developer-preview release of DeepSeek Harness.",
   "binary": {

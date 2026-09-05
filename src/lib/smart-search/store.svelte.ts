@@ -95,4 +95,10 @@ export class SmartSearchStore {
     this.extractedTerms = []
     this.subqueries = []
   }
+
+  /** Ignore a late preview response while preserving the results already shown. */
+  cancel(): void {
+    this.sequence++
+    this.loading = false
+  }
 }

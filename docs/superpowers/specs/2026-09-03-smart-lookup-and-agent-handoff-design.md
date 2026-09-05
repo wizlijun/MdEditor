@@ -270,7 +270,7 @@ P0 不新增 SearchPlanV2。继续使用现有严格 DTO：
 只包含：
 
 - 原始问题，最多 2,000 Unicode 字符且最多 8 KiB UTF-8。
-- `referenceTime/timezone/locale`。
+- `referenceTime/referenceDate/timezone/locale`，以及宿主由冻结时间与时区计算的可信时间锚点。
 - 宿主预解析并锁定的显式查询 filters。
 - 完整 SearchPlanV1 schema 和紧凑规则。
 
@@ -284,6 +284,9 @@ P0 不新增 SearchPlanV2。继续使用现有严格 DTO：
 
 ### 5.3 Planner 输出与宿主规则
 
+- Planner 先完成时间闸门，再生成查询臂；详细的表达语义和校验顺序见 [`2026-09-05-smart-lookup-time-first-design.md`](2026-09-05-smart-lookup-time-first-design.md)。
+- 新 Planner 始终输出顶层 `time`；无时间证据时为 `null`，但宿主继续兼容省略该可选字段的旧 V1。`document_date.sourceText` 必须逐字来自原问题，且不得继续作为正文关键词。
+- 相对周/月/年使用现有符号表达由 Rust 解算；相对日/季度复制对应宿主锚点到现有双端 `absolute_range`，宿主校验时间词与最终范围一致；`rolling_window` 使用包含两端的精确 N 日/N×7 日语义。`SearchPlanV1` wire 不变。
 - 新智能查找最多 2 个逻辑查询臂、8 个物理查询；物理上限沿用当前 compiler，避免多值显式 filters 展开后产生新的兼容错误。
 - 通常一个 precision、一个 recall；不需要扩展时允许只有一个 precision。
 - 显式 filters 不能被删除、放宽或改写。
@@ -311,7 +314,7 @@ Planner provider 必须满足：
 ### 6.1 可信边界
 
 - WebView 只提交原问题、Planner JSON、冻结时间和现有设置。
-- Rust 使用现有 `notemd_search_plan_context` 锁定显式 filters。
+- Rust 使用 `notemd_search_plan_context` 锁定显式 filters，并根据冻结时间与时区生成可信时间锚点。
 - Rust 严格解析 SearchPlanV1，编译为 typed `searchidx::Query`。
 - 不执行 Planner 生成的 shell、CLI 字符串、绝对路径或工具调用。
 - 继续复用 `notemd_planned_search` 与 `notemd search` 的索引、排序、来源权重和取消机制。
@@ -690,7 +693,7 @@ interface SmartLookupSettings {
 
 继续使用：
 
-- `notemd_search_plan_context(originalQuery)`。
+- `notemd_search_plan_context(originalQuery, referenceTime, timezone)`。
 - `notemd_planned_search(originalQuery, plan, referenceTime, timezone, options)`。
 - `notemd_search` / `notemd_smart_search` 用于输入预览。
 - 现有 `SearchPlanV1`、`ResolvedSearchPlan`、`SmartSearchResponse` 和 relevance reasons。

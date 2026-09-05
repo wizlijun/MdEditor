@@ -11,6 +11,17 @@ For the full commit history, see the git log.
 
 - **The collaborative Memory document supports whole-document editing.** Cross-block selection, cut/paste, clearing the document, trailing blank paragraphs and hard breaks now persist correctly, and saving no longer interrupts typing or IME input. Formatting, lists, links, images and tables have visible controls; unsaved drafts can be recovered, compared and retried. Block-aware undo checks its target before restoring text, including after an external move. The updated Memory plugin and host Editor Kit must be deployed together.
 
+## v6.905.6 — 2026-09-05
+
+### Changed
+
+- **Smart Lookup puts the results first.** Matching notes and the first original-text preview appear directly, with just one Open original action and a More menu for copying references, quick answers and in-depth research. The window stays a stable size, supports keyboard navigation and narrow layouts, and shows a scrollable activity history with an explicit Stop action.
+- **Time-sensitive questions are narrowed before retrieval.** The fast planning step separates document-date constraints from search topics, using a frozen local date and time zone. Validated boundaries apply to every search query instead of treating phrases such as “last week” as keywords. Update Claude Agent to 1.0.30, Codex Agent to 1.0.17 or DeepSeek Agent to 1.1.16 for the matching planning instructions.
+
+### Fixed
+
+- **Interrupted work no longer replaces newer results or answers.** Stopping, changing the question or selecting different notes invalidates late responses. Failures preserve available matches and show concise, actionable messages without exposing raw service errors; copying research instructions never starts an Agent by accident.
+
 ## v6.905.5 — 2026-09-05
 
 ### Changed
