@@ -202,10 +202,10 @@ describe('Next plugin packaging', () => {
   })
 })
 
-describe('agent-owned concurrency settings', () => {
+describe('agent-owned concurrency and time-planning host requirements', () => {
   const agentDirs = ['claude-agent', 'codex-agent', 'deepseek-agent']
 
-  it.each(agentDirs)('%s keeps concurrency out of the global Settings dialog', (dir) => {
+  it.each(agentDirs)('%s keeps concurrency plugin-owned and requires a time-aware host', (dir) => {
     const manifest = JSON.parse(
       readFileSync(join(ROOT, 'plugins-src', dir, 'manifest.v2.json'), 'utf8'),
     ) as {
@@ -218,7 +218,9 @@ describe('agent-owned concurrency settings', () => {
     expect(manifest.contributes?.settings).toBeUndefined()
     expect(manifest.capabilities).toContain('settings')
     expect(manifest.capabilities).not.toContain('agent')
-    expect(manifest.engines?.notemd).toBe('>=6.828.1')
+    // SearchPlanV1 output is unchanged, but these Planner templates require
+    // referenceDate and trusted time anchors supplied by the 6.905.6 host.
+    expect(manifest.engines?.notemd).toBe('>=6.905.6')
     for (const catalog of Object.values(manifest.i18n ?? {})) {
       expect(catalog['settings.tab_label']).toBeUndefined()
       expect(catalog['settings.fields']).toBeUndefined()
