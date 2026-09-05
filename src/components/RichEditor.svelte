@@ -850,6 +850,7 @@
 
   import { findState } from '../lib/find-replace.svelte'
   import { reveal } from '../lib/outline/reveal.svelte'
+  import { findRichRevealTarget } from '../lib/toc/reveal-target'
   import { consumeEditorFocus } from '../lib/editor-focus.svelte'
 
   // Starts at 0, NOT at whatever is already pending: this component is rebuilt
@@ -868,13 +869,7 @@
     if (!req || req.seq === lastRevealSeq || !host || status !== 'mounted') return
     if (req.path && req.path !== tab.filePath) return
     lastRevealSeq = req.seq
-    // 渲染 DOM 中按锚文本查找第一个匹配的元素
-    const walker = document.createTreeWalker(host, NodeFilter.SHOW_TEXT)
-    let target: Element | null = null
-    while (walker.nextNode()) {
-      const tn = walker.currentNode as Text
-      if (tn.textContent && tn.textContent.includes(req.text)) { target = tn.parentElement; break }
-    }
+    const target = findRichRevealTarget(host, req)
     if (target) {
       target.scrollIntoView({ behavior: 'smooth', block: 'center' })
       target.classList.add('outline-reveal-flash')

@@ -16,11 +16,18 @@ export interface RevealRequest {
    * 省略时任何文档都认领 —— 大纲面板在同一文档内跳转,不需要这层保护。
    */
   path?: string | null
+  /** Zero-based top-level heading index for precise TOC navigation in rich mode. */
+  headingIndex?: number
 }
 
 export const reveal = $state<{ req: RevealRequest | null }>({ req: null })
 
 let seq = 0
-export function requestReveal(line: number, text: string, path?: string | null): void {
-  reveal.req = { seq: ++seq, line, text, path }
+export function requestReveal(
+  line: number,
+  text: string,
+  path?: string | null,
+  options: Pick<RevealRequest, 'headingIndex'> = {},
+): void {
+  reveal.req = { seq: ++seq, line, text, path, ...options }
 }

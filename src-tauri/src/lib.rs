@@ -2085,6 +2085,7 @@ fn menu_label(locale: &str, key: &str) -> String {
         "view.folderView" => ("Folder View", "文件夹视图", "フォルダビュー", "Ordneransicht"),
         "view.vaultSearch" => ("Search View", "搜索视图", "検索ビュー", "Suchansicht"),
         "view.sidecarNotes" => ("Sidecar Notes View", "手记视图", "サイドノートビュー", "Randnotizen-Ansicht"),
+        "view.tableOfContents" => ("Table of Contents View", "目录视图", "目次ビュー", "Inhaltsverzeichnis-Ansicht"),
         "view.history" => ("History View", "历史视图", "履歴ビュー", "Verlaufsansicht"),
         "window.zoomIn" => ("Zoom In", "放大", "拡大", "Vergrößern"),
         "window.zoomOut" => ("Zoom Out", "缩小", "縮小", "Verkleinern"),
@@ -2636,6 +2637,7 @@ fn build_menu<R: tauri::Runtime>(
         .item(&MenuItemBuilder::with_id("toggle-folder-view", menu_label(locale, "view.folderView")).accelerator("CmdOrCtrl+Shift+E").build(app)?)
         .item(&MenuItemBuilder::with_id("toggle-vault-search", menu_label(locale, "view.vaultSearch")).accelerator("CmdOrCtrl+Shift+F").build(app)?)
         .item(&MenuItemBuilder::with_id("toggle-sidecar-notes", menu_label(locale, "view.sidecarNotes")).accelerator("CmdOrCtrl+Shift+O").build(app)?)
+        .item(&MenuItemBuilder::with_id("toggle-table-of-contents", menu_label(locale, "view.tableOfContents")).build(app)?)
         .item(&MenuItemBuilder::with_id("toggle-git-history", menu_label(locale, "view.history")).accelerator("CmdOrCtrl+Shift+Y").build(app)?);
     let view_menu: Submenu<R> = view_b.build()?;
 

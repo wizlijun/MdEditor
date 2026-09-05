@@ -7,6 +7,10 @@ For the full commit history, see the git log.
 
 ## Unreleased
 
+### Added
+
+- **A read-only table of contents makes long Markdown articles faster to navigate.** Open the new outline-style view beside Sidecar Notes and History to preview the current document's heading hierarchy—including unsaved edits—and jump directly to any section, even when heading titles repeat.
+
 ## v6.905.2 — 2026-09-05
 
 ### Changed

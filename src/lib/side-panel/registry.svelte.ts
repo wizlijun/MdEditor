@@ -137,7 +137,7 @@ export async function loadSidePanels(): Promise<void> {
   await s.save()
 }
 
-/** Register the three built-in views. Idempotent; call once at startup. */
+/** Register the built-in views. Idempotent; call once at startup. */
 export function registerBuiltinSideViews(): void {
   registerSideView({
     id: 'folder-view', side: 'left', order: 0,
@@ -161,7 +161,14 @@ export function registerBuiltinSideViews(): void {
     component: () => import('../../components/outline/OutlinePanel.svelte'),
   })
   registerSideView({
-    id: 'git-history', side: 'right', order: 1,
+    id: 'table-of-contents', side: 'right', order: 1,
+    title: () => t('toc.title'),
+    isAvailable: () => true,
+    appliesTo: (tab) => !(tab != null && isOutlineNoteTab(tab)),
+    component: () => import('../../components/toc/TocPanel.svelte'),
+  })
+  registerSideView({
+    id: 'git-history', side: 'right', order: 2,
     title: () => t('history.title'),
     isAvailable: () => historyGate.enabled,
     appliesTo: (tab) => tab != null && historyAppliesTo(tab, sotvaultStore.vaultRoot),
