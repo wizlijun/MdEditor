@@ -134,10 +134,20 @@ describe('CdrApplicationService', () => {
       'document-1', profile.descriptor, session,
       fixedActorSource({ kind: 'human', id: 'local' }), { authorize }, profile,
     )
-    const callerOwned = batch('immutable-request')
+    const move = {
+      kind: 'block.move' as const, operationId: 'immutable-move',
+      target: { blockId: 'block-1', expectedBlockRevision: 'block-1/1' },
+      payload: {
+        source: { leftBlockId: null as string | null, rightBlockId: null },
+        destination: { leftBlockId: null as string | null, rightBlockId: null },
+      },
+    }
+    const original = batch('immutable-request')
+    const callerOwned: OperationBatch = { ...original, operations: [...original.operations, move] }
 
     const pending = app.submit(callerOwned)
     ;(callerOwned.operations[0].payload as { content: string }).content = 'Mutated after authorization started.'
+    move.payload.destination.leftBlockId = 'Mutated nested anchor'
     releaseAuthorization?.('apply')
     await expect(pending).resolves.toMatchObject({ kind: 'applied' })
 
@@ -145,6 +155,9 @@ describe('CdrApplicationService', () => {
     expect(Object.isFrozen(observed[0])).toBe(true)
     expect(Object.isFrozen(observed[0].operations)).toBe(true)
     expect(Object.isFrozen(observed[0].operations[0])).toBe(true)
+    expect(observed[0].operations[1]).toMatchObject({ payload: { destination: { leftBlockId: null } } })
+    if (observed[0].operations[1].kind !== 'block.move') throw new Error('expected move')
+    expect(Object.isFrozen(observed[0].operations[1].payload.destination)).toBe(true)
     expect(session.snapshot().blocks[0].markdown).toBe('After.')
   })
 

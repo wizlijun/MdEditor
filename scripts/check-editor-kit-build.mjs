@@ -78,6 +78,9 @@ if (v2JsSize === null) {
   if (!js.includes('mountDocumentEditor')) {
     problems.push(`${V2_JS} does not export mountDocumentEditor.`)
   }
+  if (!js.includes('documentEditorApiVersion')) {
+    problems.push(`${V2_JS} does not export the document editor compatibility version.`)
+  }
 }
 
 if (problems.length > 0) {

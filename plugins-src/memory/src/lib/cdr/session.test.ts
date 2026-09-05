@@ -143,6 +143,9 @@ describe('InMemoryDocumentSession', () => {
     if (deleted.kind === 'applied') expect(deleted.change.blockRevisions).toEqual({})
     expect(session.snapshot().blocks.map((block) => block.blockId)).toEqual(['block-a', 'block-b'])
     expect(session.revisionHistory()).toHaveLength(2)
+    const legacyV5 = { ...session.exportState(), schema: 'notemd.cdr/document-session/v5' }
+    expect(InMemoryDocumentSession.fromState(legacyV5, sequentialIds('legacy-structure')).exportState().receipts)
+      .toEqual(session.exportState().receipts)
 
     const reopened = InMemoryDocumentSession.fromState(session.exportState(), sequentialIds('reopened'))
     const reused = await reopened.submit(
@@ -308,7 +311,7 @@ describe('InMemoryDocumentSession', () => {
     expect(rejected.audit().filter((event) => event.action === 'proposal-applied')).toHaveLength(0)
   })
 
-  it('limits Stage 1A proposals to one visible block replacement', async () => {
+  it('accepts multi-operation proposals while rejecting empty proposals', async () => {
     const session = new InMemoryDocumentSession(fixture(), sequentialIds('test'))
     const one = replace('proposal', 'block-a', 'block-a/1', '# Suggested')
     await expect(session.propose({ ...one, operations: [] }, 'agent')).rejects.toThrow('CDR_PROPOSAL_OPERATION_COUNT')
@@ -322,7 +325,9 @@ describe('InMemoryDocumentSession', () => {
           target: { blockId: 'block-b', expectedBlockRevision: 'block-b/1' },
         },
       ],
-    }, 'agent')).rejects.toThrow('CDR_PROPOSAL_OPERATION_COUNT')
+    }, 'agent')).resolves.toMatchObject({ status: 'pending' })
+    expect(InMemoryDocumentSession.fromState(session.exportState(), sequentialIds('multi-proposal')).proposals()[0].batch.operations)
+      .toHaveLength(2)
 
     const state = session.exportState()
     expect(() => InMemoryDocumentSession.fromState({
@@ -331,6 +336,91 @@ describe('InMemoryDocumentSession', () => {
         changeSetId: 'damaged', actorId: 'agent', status: 'pending', batch: { ...one, operations: [] },
       }],
     }, sequentialIds('restore'))).toThrow('CDR_STATE_INVALID')
+  })
+
+  it('clears the whole document, restores deleted identities with edits, and reopens every revision', async () => {
+    const session = new InMemoryDocumentSession(fixture(), sequentialIds('clear'))
+    const base = session.snapshot()
+    const cleared = await session.submit({
+      ...replace('clear', 'block-a', 'block-a/1', ''),
+      operations: [...replace('clear', 'block-a', 'block-a/1', '').operations, ...remove(base, 'clear-b', 'block-b').operations],
+    }, 'human')
+    expect(cleared.kind).toBe('applied')
+    expect(session.snapshot().blocks).toHaveLength(1)
+    expect(session.snapshot().blocks[0].markdown).toBe('')
+    expect(session.revisionHistory()).toHaveLength(1)
+    const reopened = InMemoryDocumentSession.fromState(session.exportState(), sequentialIds('restore'))
+    const old = base.blocks[1]
+    const restoreBatch: OperationBatch = {
+      requestId: 'restore-b', documentId: base.documentId, baseRevisionId: reopened.snapshot().revisionId,
+      operations: [{
+        kind: 'block.insert', operationId: 'restore-b/insert', target: { leftBlockId: 'block-a', rightBlockId: null },
+        payload: { candidateBlockId: old.blockId, content: old.markdown, restoreFrom: { revisionId: base.revisionId, blockId: old.blockId } },
+      }, ...replace('restore-edit', old.blockId, old.blockRevision, 'Restored and edited.').operations],
+    }
+    const restored = await reopened.submit(restoreBatch, 'human')
+    expect(restored.kind).toBe('applied')
+    const after = InMemoryDocumentSession.fromState(reopened.exportState(), sequentialIds('after'))
+    expect(after.snapshot().blocks[1]).toMatchObject({ blockId: old.blockId, markdown: 'Restored and edited.' })
+    await expect(after.submit(restoreBatch, 'human')).resolves.toMatchObject({ kind: 'applied', duplicate: true })
+    await after.submit({
+      ...replace('keep-restored', old.blockId, after.snapshot().blocks[1].blockRevision, 'Still restored.'),
+      baseRevisionId: after.snapshot().revisionId,
+    }, 'human')
+    expect(InMemoryDocumentSession.fromState(after.exportState(), sequentialIds('again')).snapshot().blocks[1].markdown)
+      .toBe('Still restored.')
+  })
+
+  it('moves without changing content versions, detaches nested proposals, and applies mixed proposals atomically', async () => {
+    const session = new InMemoryDocumentSession(fixture(), sequentialIds('move'))
+    const move = {
+      kind: 'block.move' as const, operationId: 'move-a', target: { blockId: 'block-a', expectedBlockRevision: 'block-a/1' },
+      payload: { source: { leftBlockId: null, rightBlockId: 'block-b' }, destination: { leftBlockId: 'block-b', rightBlockId: null } },
+    }
+    const batch: OperationBatch = { ...replace('move', 'block-a', 'block-a/1', '# Changed'), operations: [
+      ...replace('edit', 'block-a', 'block-a/1', '# Changed').operations, move,
+    ] }
+    const proposal = await session.propose(batch, 'agent')
+    move.payload.destination.leftBlockId = 'caller-mutated'
+    const detached = session.proposal(proposal.changeSetId)!
+    if (detached.batch.operations[1].kind !== 'block.move') throw new Error('expected move')
+    ;(detached.batch.operations[1].payload.destination as { leftBlockId: string | null }).leftBlockId = 'reader-mutated'
+    expect(session.proposal(proposal.changeSetId)?.batch.operations[1]).toMatchObject({ payload: { destination: { leftBlockId: 'block-b' } } })
+    expect((await session.decideProposal(proposal.changeSetId, 'accept', 'human'))?.kind).toBe('applied')
+    expect(session.snapshot().blocks.map((block) => block.blockId)).toEqual(['block-b', 'block-a'])
+    expect(session.snapshot().blocks[0].blockRevision).toBe('block-b/1')
+    expect(session.revisionHistory()).toHaveLength(1)
+    expect(InMemoryDocumentSession.fromState(session.exportState(), sequentialIds('reopen-move')).snapshot()).toEqual(session.snapshot())
+  })
+
+  it('migrates canonical v5 receipts without resigning payloads and rejects v6 edits mislabeled as v5', async () => {
+    const session = new InMemoryDocumentSession(fixture(), sequentialIds('v5'))
+    await session.submit(replace('legacy-v5', 'block-a', 'block-a/1', '# Legacy v5'), 'human')
+    const state = session.exportState()
+    const migrated = InMemoryDocumentSession.fromState({ ...state, schema: 'notemd.cdr/document-session/v5' }, sequentialIds('migrated'))
+      .exportState()
+    expect(migrated.schema).toBe(DOCUMENT_SESSION_STATE_SCHEMA)
+    expect(migrated.receipts).toEqual(state.receipts)
+    const current = session.snapshot()
+    await session.submit({ ...replace('empty-v6', 'block-a', current.blocks[0].blockRevision, ''), baseRevisionId: current.revisionId }, 'human')
+    expect(() => InMemoryDocumentSession.fromState({ ...session.exportState(), schema: 'notemd.cdr/document-session/v5' }, sequentialIds('reject')))
+      .toThrow('must contain visible content')
+  })
+
+  it('conflicts a mixed proposal as a whole when one target changes before acceptance', async () => {
+    const session = new InMemoryDocumentSession(fixture(), sequentialIds('mixed-conflict'))
+    const proposed = await session.propose({
+      ...replace('mixed', 'block-a', 'block-a/1', '# Proposed'),
+      operations: [...replace('mixed', 'block-a', 'block-a/1', '# Proposed').operations,
+        ...remove(session.snapshot(), 'delete-b', 'block-b').operations],
+    }, 'agent')
+    await session.submit(replace('concurrent', 'block-b', 'block-b/1', 'Concurrent B'), 'human')
+    const before = session.snapshot()
+    expect(await session.decideProposal(proposed.changeSetId, 'accept', 'human')).toMatchObject({ kind: 'conflicted' })
+    expect(session.snapshot()).toEqual(before)
+    expect(session.revisionHistory()).toHaveLength(1)
+    expect(InMemoryDocumentSession.fromState(session.exportState(), sequentialIds('mixed-reopen')).proposals()[0].status)
+      .toBe('conflicted')
   })
 
   it('binds an assessment to the exact block revision', async () => {

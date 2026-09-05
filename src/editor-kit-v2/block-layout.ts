@@ -1,6 +1,7 @@
 import { parseMarkdown, serializeMarkdown } from '@moraya/core'
-import type { Node as PmNode, Schema } from 'prosemirror-model'
+import { Fragment, type Node as PmNode, type Schema } from 'prosemirror-model'
 import type { Transaction } from 'prosemirror-state'
+import { tagBlockNode } from './identity'
 
 export interface LayoutBlock {
   blockId: string
@@ -22,11 +23,6 @@ export interface BlockReplacement {
   markdown: string
 }
 
-export interface LocalBlockEditPlan {
-  blockId: string
-  layout: BlockLayout
-}
-
 export function assertBlockIdentity(blocks: readonly LayoutBlock[]): void {
   const ids = blocks.map((block) => block.blockId)
   if (ids.length === 0 || ids.some((id) => id.length === 0) || new Set(ids).size !== ids.length) {
@@ -35,11 +31,37 @@ export function assertBlockIdentity(blocks: readonly LayoutBlock[]): void {
 }
 
 function parseBlock(block: LayoutBlock, schema: Schema): PmNode {
-  const parsed = parseMarkdown(block.markdown, schema)
-  if (parsed.childCount === 0) {
-    throw new Error(`EDITOR_KIT_V2_BLOCK_SHAPE: ${block.blockId} has no top-level editor node`)
+  let parsed = parseMarkdown(block.markdown, schema)
+  // Markdown parsers trim an end-of-input hard break even though the editor's
+  // serializer emits its explicit two spaces + newline. Restore only that
+  // suffix in an ordinary textblock, never in fenced/indented code or a table.
+  const suffix = block.markdown.match(/ {2}\r?\n(?:[ \t>]* {2}\r?\n)*$/)?.[0]
+  if (suffix && schema.nodes.hardbreak) {
+    const count = suffix.match(/\n/g)!.length
+    const restore = (node: PmNode): PmNode => {
+      if (node.type.spec.code || node.type === schema.nodes.table || node.isLeaf) return node
+      if (node.isTextblock) {
+        if (node.type !== schema.nodes.paragraph && node.type !== schema.nodes.heading) return node
+        let existing = 0
+        for (let index = node.childCount - 1; index >= 0; index--) {
+          if (node.child(index).type !== schema.nodes.hardbreak || node.child(index).attrs.isInline) break
+          existing++
+        }
+        return node.copy(node.content.append(Fragment.fromArray(
+          Array.from({ length: Math.max(0, count - existing) }, () => schema.nodes.hardbreak.create({ isInline: false })),
+        )))
+      }
+      if (!node.lastChild) return node
+      const children: PmNode[] = []
+      node.forEach((child, _pos, index) => children.push(index === node.childCount - 1 ? restore(child) : child))
+      return node.copy(Fragment.fromArray(children))
+    }
+    parsed = restore(parsed)
   }
-  return parsed
+  const nodes: PmNode[] = []
+  parsed.forEach((node) => nodes.push(tagBlockNode(node, block.blockId)))
+  if (nodes.length === 0) nodes.push(tagBlockNode(schema.nodes.paragraph.create(), block.blockId))
+  return schema.topNodeType.create(null, nodes)
 }
 
 function layoutFrom(blocks: readonly LayoutBlock[], parsed: readonly PmNode[]): BlockLayout {
@@ -68,69 +90,10 @@ export function spanContaining(layout: BlockLayout, nodeIndex: number): BlockSpa
   return layout.spans.find((span) => nodeIndex >= span.startIndex && nodeIndex < span.endIndex) ?? null
 }
 
-/**
- * Attribute one arbitrary ProseMirror document transaction to an existing
- * governed block. A block is a span of one or more top-level editor nodes, so
- * Enter, paragraph joins, list/heading conversions and multi-paragraph paste
- * are content edits as long as every node outside that span is unchanged.
- *
- * A pure insertion exactly between two spans can be explained by either
- * neighbour. The transaction's pre-edit selection supplies the preferred
- * owner; without that disambiguation the edit fails closed.
- */
-export function planLocalBlockEdit(
-  before: PmNode,
-  after: PmNode,
-  layout: BlockLayout,
-  preferredBlockId: string | null,
-): LocalBlockEditPlan | null {
-  const coversBefore = layout.spans.length > 0
-    && layout.spans[0].startIndex === 0
-    && layout.spans.at(-1)?.endIndex === before.childCount
-    && layout.spans.every((span, index) => (
-      span.startIndex < span.endIndex
-      && (index === 0 || layout.spans[index - 1].endIndex === span.startIndex)
-    ))
-  if (!coversBefore) return null
-
-  const candidates = layout.spans.flatMap((span, spanIndex) => {
-    const suffixCount = before.childCount - span.endIndex
-    const nextEndIndex = after.childCount - suffixCount
-    if (nextEndIndex <= span.startIndex) return []
-
-    for (let index = 0; index < span.startIndex; index += 1) {
-      if (!before.child(index).eq(after.child(index))) return []
-    }
-    for (let offset = 0; offset < suffixCount; offset += 1) {
-      if (!before.child(span.endIndex + offset).eq(after.child(nextEndIndex + offset))) return []
-    }
-
-    const delta = after.childCount - before.childCount
-    return [{
-      blockId: span.blockId,
-      layout: {
-        spans: layout.spans.map((item, index) => {
-          if (index < spanIndex) return { ...item }
-          if (index === spanIndex) return { ...item, endIndex: item.endIndex + delta }
-          return {
-            ...item,
-            startIndex: item.startIndex + delta,
-            endIndex: item.endIndex + delta,
-          }
-        }),
-      },
-    }]
-  })
-
-  if (candidates.length === 1) return candidates[0]
-  if (preferredBlockId === null) return null
-  return candidates.find((candidate) => candidate.blockId === preferredBlockId) ?? null
-}
-
 export function serializeSpan(doc: PmNode, span: BlockSpan): string {
   const nodes: PmNode[] = []
   for (let index = span.startIndex; index < span.endIndex; index += 1) nodes.push(doc.child(index))
-  return serializeMarkdown(doc.type.schema.topNodeType.create(null, nodes)).trimEnd()
+  return serializeMarkdown(doc.type.schema.topNodeType.create(null, nodes))
 }
 
 function positionAt(doc: PmNode, index: number): number {
@@ -175,7 +138,7 @@ export function replaceBlockSpans(
   const counts = layout.spans.map((span) => span.endIndex - span.startIndex)
   let next = transaction
   for (const item of planned) {
-    const markdownAlreadyMatches = serializeSpan(next.doc, item.span) === item.markdown.trimEnd()
+    const markdownAlreadyMatches = serializeSpan(next.doc, item.span) === item.markdown
     if (!markdownAlreadyMatches && !rangeMatches(next.doc, item.span, item.parsed)) {
       next = next.replaceWith(
         positionAt(next.doc, item.span.startIndex),
@@ -257,9 +220,4 @@ export function deleteBlockSpan(
       }),
     },
   }
-}
-
-export function sameBlockOrder(layout: BlockLayout, blocks: readonly LayoutBlock[]): boolean {
-  return layout.spans.length === blocks.length
-    && layout.spans.every((span, index) => span.blockId === blocks[index]?.blockId)
 }

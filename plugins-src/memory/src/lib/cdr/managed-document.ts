@@ -1,5 +1,4 @@
 import { computeFingerprint, type BlockFingerprint } from '../../../../../src/lib/blockchunk/fingerprint'
-import { applyDocumentChange } from '../../../../../src/lib/cdr/core'
 import { bridge } from '../bridge'
 import {
   parseDocumentSessionState,
@@ -105,15 +104,6 @@ function sameFingerprint(left: BlockFingerprint, right: BlockFingerprint): boole
 async function verifyManagedAggregate(aggregate: ManagedAggregate): Promise<void> {
   const knownBlocks = new Map<string, Set<string>>()
   const revisions = [...aggregate.session.revisionHistory, aggregate.session.head]
-  const revisionById = new Map(revisions.map((revision) => [revision.revisionId, revision]))
-  if (revisionById.size !== revisions.length) io('aggregate.session contains duplicate document revision IDs')
-  const knownIdsThrough = (revisionId: string): ReadonlySet<string> => {
-    const index = revisions.findIndex((revision) => revision.revisionId === revisionId)
-    if (index < 0) io(`aggregate.session references unknown revision ${revisionId}`)
-    return new Set(revisions.slice(0, index + 1).flatMap((revision) => (
-      revision.blocks.map((block) => block.blockId)
-    )))
-  }
   for (const [revisionIndex, revision] of revisions.entries()) {
     for (const [blockIndex, block] of revision.blocks.entries()) {
       if (await sha256Hex(block.markdown) !== block.blockRevision) {
@@ -122,35 +112,6 @@ async function verifyManagedAggregate(aggregate: ManagedAggregate): Promise<void
       const blockRevisions = knownBlocks.get(block.blockId) ?? new Set<string>()
       blockRevisions.add(block.blockRevision)
       knownBlocks.set(block.blockId, blockRevisions)
-    }
-  }
-  for (const [receiptIndex, receipt] of aggregate.session.receipts.entries()) {
-    if (receipt.outcome.kind !== 'applied') continue
-    const change = receipt.outcome.change
-    const base = revisionById.get(change.baseRevisionId)
-    const result = revisionById.get(change.revisionId)
-    if (!base || !result) {
-      io(`aggregate.session.receipts[${receiptIndex}] references an unknown document revision`)
-    }
-    const batch = {
-      requestId: receipt.requestId,
-      documentId: aggregate.session.head.documentId,
-      baseRevisionId: receipt.submittedBaseRevisionId,
-      operations: change.operations,
-    }
-    let replayed
-    try {
-      replayed = applyDocumentChange(
-        base,
-        batch,
-        { revisionId: change.revisionId, blockRevisions: change.blockRevisions },
-        { knownBlockIds: knownIdsThrough(change.baseRevisionId) },
-      )
-    } catch {
-      io(`aggregate.session.receipts[${receiptIndex}] cannot replay its applied change`)
-    }
-    if (JSON.stringify(replayed) !== JSON.stringify(result)) {
-      io(`aggregate.session.receipts[${receiptIndex}] does not produce its stored revision`)
     }
   }
   for (const [assessmentIndex, assessment] of aggregate.session.assessments.entries()) {
@@ -218,13 +179,14 @@ async function parseManagedAggregate(value: unknown, documentId: string): Promis
 }
 
 async function buildManagedAggregate(session: DocumentSessionState): Promise<ManagedAggregate> {
+  const normalized = parseDocumentSessionState(session)
   const aggregate: ManagedAggregate = {
     schema: MANAGED_DOCUMENT_SCHEMA,
     profile: { ...MEMORY_SELF_PROFILE_DESCRIPTOR },
-    session,
+    session: normalized,
     derivedBlockIndex: {
       schema: DERIVED_BLOCK_INDEX_SCHEMA,
-      active: await Promise.all(session.head.blocks.map(async (block) => ({
+      active: await Promise.all(normalized.head.blocks.map(async (block) => ({
         blockId: block.blockId,
         blockRevision: block.blockRevision,
         fingerprint: await computeFingerprint(block.markdown),

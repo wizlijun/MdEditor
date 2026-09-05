@@ -108,6 +108,9 @@ importers:
       prosemirror-commands:
         specifier: ^1.7.1
         version: 1.7.1
+      prosemirror-history:
+        specifier: 1.5.0
+        version: 1.5.0
       prosemirror-model:
         specifier: 1.25.4
         version: 1.25.4

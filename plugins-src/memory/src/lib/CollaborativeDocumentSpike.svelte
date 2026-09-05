@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount, tick } from 'svelte'
-  import { bridge } from './bridge'
+  import { bridge, clipboardWrite } from './bridge'
   import {
     DOCUMENT_AGENT_POLL_MS,
     documentAgentReadiness,
@@ -34,7 +34,7 @@
     inspectManagedDocument,
     managedMemoryPath,
   } from './cdr/managed-document'
-  import { loadKitV2, type MountedDocumentEditor, type SurfaceUpdate } from './editor-kit-v2'
+  import { loadKitV2, type EditorCommand, type EditorSurfaceState, type MountedDocumentEditor, type SurfaceUpdate } from './editor-kit-v2'
 
   class EditorSyncError extends Error {}
 
@@ -61,8 +61,10 @@
   let auditCount = $state(0)
   let loading = $state(true)
   let activeWrites = $state(0)
-  let saving = $derived(activeWrites > 0)
+  let surfaceState = $state<EditorSurfaceState>({ dirty: false, saving: false, readOnly: false, error: null, selectedBlockId: null })
+  let saving = $derived(activeWrites > 0 || surfaceState.saving)
   let locked = $state(false)
+  let editingDisabled = $derived(!editor || loading || locked || surfaceState.readOnly)
   let notice = $state('正在恢复共写文档…')
   let failed = $state('')
   let agentInstruction = $state('在不改变事实、范围和不确定性的前提下，让表述更清楚。')
@@ -83,12 +85,52 @@
   let agentReadiness = $derived(documentAgentReadiness(agent))
   let disposed = false
   let stopObserving: (() => void) | null = null
+  let stopObservingState: (() => void) | null = null
+  let addressForm = $state<'link' | 'image' | null>(null)
+  let address = $state('')
+  let addressLabel = $state('')
+  let addressBlockId: string | null = null
+  let addressBlockRevision: string | null = null
+  let recoveryMarkdown = $state('')
+  let lockedRecoveryMessage = $state('')
+  let discardConfirm = $state(false)
+  let selectedHistoryId = $state('')
+  let history = $state<readonly DocumentRevision[]>([])
+  let restoreConfirm = $state(false)
+  let restoring = $state(false)
+  let selectedHistory = $derived(history.find((revision) => revision.revisionId === selectedHistoryId))
+  const toolbarCommands: { label: string; command: EditorCommand; title?: string }[] = [
+    { label: '撤销', command: { kind: 'undo' }, title: '撤销 (⌘/Ctrl+Z)' },
+    { label: '重做', command: { kind: 'redo' }, title: '重做 (⌘/Ctrl+Shift+Z)' },
+    { label: '粗体', command: { kind: 'bold' }, title: '粗体 (⌘/Ctrl+B)' },
+    { label: '斜体', command: { kind: 'italic' }, title: '斜体 (⌘/Ctrl+I)' },
+    { label: '删除线', command: { kind: 'strikethrough' } },
+    { label: '行内代码', command: { kind: 'code' } },
+    { label: '高亮', command: { kind: 'highlight' } },
+    { label: '引用', command: { kind: 'blockquote' } },
+    { label: '无序列表', command: { kind: 'bullet-list' } },
+    { label: '有序列表', command: { kind: 'ordered-list' } },
+    { label: '任务列表', command: { kind: 'task-list' } },
+    { label: '增加缩进', command: { kind: 'indent' } },
+    { label: '减少缩进', command: { kind: 'outdent' } },
+    { label: '代码块', command: { kind: 'code-block' } },
+    { label: '分隔线', command: { kind: 'horizontal-rule' } },
+    { label: '插入表格', command: { kind: 'table' } },
+  ]
+  const tableCommands: { label: string; command: EditorCommand }[] = [
+    { label: '下方插入行', command: { kind: 'table.add-row' } },
+    { label: '删除行', command: { kind: 'table.delete-row' } },
+    { label: '右侧插入列', command: { kind: 'table.add-column' } },
+    { label: '删除列', command: { kind: 'table.delete-column' } },
+  ]
 
   onMount(() => {
     void initializeManagedDocument()
     return () => {
       disposed = true
       activeAgentRun = null
+      stopObservingState?.()
+      stopObservingState = null
       const unsubscribe = stopObserving
       stopObserving = null
       if (agentTimer) clearTimeout(agentTimer)
@@ -191,7 +233,7 @@
       ids,
       readOnly: startsReadOnly,
       onBlockedStructuralEdit: () => {
-        notice = '本次编辑会清空或跨越受控知识块；请保留块内内容、分别编辑，或使用右侧新增／删除。'
+        notice = '本次操作未能应用，请检查选区或等待输入完成后重试。'
       },
       onResyncRequired: (reason) => {
         void handleResyncRequired(reason)
@@ -202,6 +244,11 @@
       return
     }
     editor = mountedEditor
+    stopObservingState = editor.surface.observeState((state) => {
+      surfaceState = state
+      if (state.error) recoveryMarkdown = mountedEditor.surface.getDraftMarkdown()
+      else if (!state.dirty && !state.saving) { recoveryMarkdown = ''; discardConfirm = false }
+    })
     if (!startsReadOnly) stopObserving = editor.surface.observeLocalOperations(handleLocalOperations)
     loading = false
     if (status.readOnlyReason) {
@@ -233,9 +280,9 @@
         const preserved = await humanCdr.propose(batch)
         durable = true
         const synchronized = await reconcileOrLock({
-          kind: 'reject-local',
+          kind: 'proposal-stored',
           requestId: batch.requestId,
-          reason: result.conflict,
+          changeSetId: preserved.changeSetId,
           authoritative: session.snapshot(),
           includedChangeIds: [],
         }, session.snapshot())
@@ -270,16 +317,16 @@
         reason: {
           code: conflict ? 'stale-base' : 'persistence-failed',
           message: conflict
-            ? '存储中的文档已由另一写入者更新；已恢复最新提交版本。'
-            : '本地修改未能持久化；已恢复上次提交版本。',
+            ? '存储中的文档已由另一写入者更新；请比较当前草稿与最新提交。'
+            : '本地修改未能持久化；草稿仍保留，可重试保存。',
         },
         authoritative: current,
         includedChangeIds: [],
       }, current)
       if (!synchronized) return
       notice = conflict
-        ? '检测到并发保存冲突；本次修改未覆盖另一写入者。'
-        : '保存失败；本次修改未生效，也未显示为已保存。'
+        ? '检测到并发保存冲突；本次修改未覆盖另一写入者。请保留草稿并比较最新版本。'
+        : '保存失败；草稿已留在编辑器中。请重试保存，或先复制、下载草稿。'
     } finally {
       activeWrites -= 1
       syncViewModels()
@@ -305,11 +352,8 @@
   }
 
   async function startAgentAction(action: 'suggest' | 'assess') {
-    const blockId = editor?.surface.selectedBlockId?.()
-    const snapshot = session?.snapshot()
-    const block = snapshot?.blocks.find((item) => item.blockId === blockId)
     const instruction = agentInstruction.trim()
-    if (!snapshot || !block || !instruction || agentBusy || saving || locked) {
+    if (!editor || !session || !instruction || agentBusy || locked || surfaceState.error) {
       notice = '请先结束输入、选择一个正文块并填写给 Agent 的要求。'
       return
     }
@@ -321,6 +365,17 @@
     agentStarting = true
     notice = action === 'suggest' ? '正在启动 Agent 生成建议…' : '正在启动 Agent 检查当前版本…'
     try {
+      // Read the exact committed block only after the editor's latest typing
+      // has received a durable acknowledgement.
+      await editor.surface.flush()
+      if (disposed) return
+      const blockId = editor.surface.selectedBlockId()
+      const snapshot = session.snapshot()
+      const block = snapshot.blocks.find((item) => item.blockId === blockId)
+      if (!block) {
+        notice = '请先选择一个正文块。'
+        return
+      }
       const selectedHarness = ready.providerId
       const result = await startDocumentAgent({
         action,
@@ -350,6 +405,8 @@
       }
       setAgentActivity(action === 'suggest' ? 'Agent 正在为这一块准备建议…' : 'Agent 正在检查这一版本…')
       scheduleAgentPoll()
+    } catch (cause) {
+      notice = `无法启动 Agent：${cause instanceof Error ? cause.message : String(cause)}`
     } finally {
       if (!disposed) agentStarting = false
     }
@@ -461,6 +518,113 @@
     notice = '正在以稳定块 ID 新增段落…'
   }
 
+  function canRun(command: EditorCommand): boolean {
+    // Selection-only transactions also publish a fresh surface state.
+    surfaceState
+    return !editingDisabled && !!editor?.surface.canExecuteCommand(command)
+  }
+
+  function runCommand(command: EditorCommand) {
+    if (!editor?.surface.executeCommand(command)) notice = '当前选区无法执行这个编辑操作。'
+  }
+
+  function chooseBlockStyle(value: string) {
+    if (value === 'paragraph') runCommand({ kind: 'paragraph' })
+    else runCommand({ kind: 'heading', level: Number(value) as 1 | 2 | 3 | 4 | 5 | 6 })
+  }
+
+  async function openAddressForm(kind: 'link' | 'image') {
+    if (!editor) return
+    const selectedBlockId = editor.surface.selectedBlockId()
+    try {
+      await editor.surface.flush()
+    } catch (cause) {
+      notice = `请先保存或处理当前草稿：${cause instanceof Error ? cause.message : String(cause)}`
+      return
+    }
+    if (disposed || selectedBlockId !== editor.surface.selectedBlockId()) {
+      notice = '所选位置已改变，请重新选择插入位置。'
+      return
+    }
+    addressForm = kind
+    address = ''
+    addressLabel = ''
+    addressBlockId = selectedBlockId
+    addressBlockRevision = session?.snapshot().blocks.find((block) => block.blockId === selectedBlockId)?.blockRevision ?? null
+  }
+
+  function applyAddress() {
+    if (!addressForm || !editor) return
+    if (editor.surface.selectedBlockId() !== addressBlockId
+      || session?.snapshot().blocks.find((block) => block.blockId === addressBlockId)?.blockRevision !== addressBlockRevision) {
+      notice = '所选位置或正文版本已改变，请重新选择插入位置。'
+      addressForm = null
+      return
+    }
+    const command: EditorCommand = addressForm === 'link'
+      ? { kind: 'link', href: address, text: addressLabel }
+      : { kind: 'image', src: address, alt: addressLabel }
+    if (!editor.surface.executeCommand(command)) {
+      notice = '无法插入，请检查地址与选区。'
+      return
+    }
+    addressForm = null
+  }
+
+  function moveSelection(direction: 'up' | 'down') {
+    const blockId = editor?.surface.selectedBlockId()
+    if (!blockId || !editor?.surface.executeStructuralCommand({ kind: direction === 'up' ? 'block.move-up' : 'block.move-down', blockId })) {
+      notice = '所选块已在文档边界，或暂时无法移动。'
+    }
+  }
+
+  async function copyMarkdown(markdown: string, label: string) {
+    try {
+      await clipboardWrite(markdown)
+      notice = `${label}已复制。`
+    } catch (cause) {
+      notice = `复制失败：${cause instanceof Error ? cause.message : String(cause)}；仍可从下方文本中手动复制。`
+    }
+  }
+
+  function downloadDraft() {
+    const url = URL.createObjectURL(new Blob([recoveryMarkdown], { type: 'text/markdown;charset=utf-8' }))
+    const anchor = document.createElement('a')
+    anchor.href = url
+    anchor.download = 'MEMORY-unsaved-draft.md'
+    anchor.click()
+    setTimeout(() => URL.revokeObjectURL(url), 1000)
+  }
+
+  function retrySave() {
+    if (!editor?.surface.retryPending()) notice = '当前修改需要先比较版本，不能直接重试覆盖。'
+  }
+
+  function revisionMarkdown(revision: DocumentRevision): string {
+    return revision.blocks.map((block) => block.markdown).join('\n\n')
+  }
+
+  async function restoreHistoryRevision() {
+    const revision = selectedHistory
+    if (!editor || !revision || !restoreConfirm || restoring) return
+    restoring = true
+    try {
+      await editor.surface.flush()
+      if (!editor.surface.restoreRevision(revision)) {
+        notice = '所选历史正文与当前一致，或暂时无法恢复。'
+        return
+      }
+      await editor.surface.flush()
+      notice = '历史正文已恢复为一个新版本；中间历史、提案与检查记录均保留。'
+      restoreConfirm = false
+    } catch (cause) {
+      notice = `恢复未完成：${cause instanceof Error ? cause.message : String(cause)}`
+    } finally {
+      restoring = false
+      syncViewModels()
+    }
+  }
+
   function deleteSelection() {
     const blockId = editor?.surface.selectedBlockId?.()
     if (!editor || !blockId || !editor.surface.executeStructuralCommand?.({ kind: 'block.delete', blockId })) {
@@ -532,6 +696,10 @@
   }
 
   function lockEditor(message: string) {
+    if (editor && (surfaceState.dirty || surfaceState.saving)) {
+      recoveryMarkdown = editor.surface.getDraftMarkdown()
+      lockedRecoveryMessage = message
+    }
     locked = true
     notice = message
     stopObserving?.()
@@ -552,13 +720,14 @@
     proposals = currentSession.proposals()
     assessments = currentSession.assessments()
     auditCount = currentSession.audit().length
+    history = [currentSession.snapshot(), ...currentSession.revisionHistory().slice().reverse()]
     editor?.decorations.setLayer('proposals', proposals
       .filter((proposal) => proposal.status === 'pending' || proposal.status === 'conflicted')
-      .map((proposal) => ({
-        blockId: operationDisplayBlockId(proposal.batch.operations[0]),
+      .flatMap((proposal) => [...new Set(proposal.batch.operations.map(operationDisplayBlockId))].map((blockId) => ({
+        blockId,
         kind: 'proposal' as const,
         label: proposal.status === 'conflicted' ? 'Agent 提案已过期' : 'Agent 提案待审阅',
-      })))
+      }))))
     editor?.decorations.setLayer('assessments', assessments
       .filter((assessment) => currentSession.assessmentIsOutdated(assessment))
       .map((assessment) => ({
@@ -575,6 +744,7 @@
 
   function operationSummary(operation: Operation): string {
     if (operation.kind === 'block.delete') return `删除块 ${operation.target.blockId}`
+    if (operation.kind === 'block.move') return `移动块 ${operation.target.blockId}`
     return operation.payload.content
   }
 
@@ -592,7 +762,7 @@
       <p>直接维护有稳定块身份的背景文档；所选 Agent 只能提交待审阅建议或绑定精确版本的检查结果。当前不改写 Claim、根 MEMORY.md 或 Agent context，也不包含跨设备协作。</p>
       {#if vaultPath}<small class="managed-path">{vaultPath}</small>{/if}
     </div>
-    <span class="status" class:loading={loading || saving || agentBusy || locked || creationPending}>{loading ? '加载中' : failed ? '不可用' : creationPending ? '未创建' : locked ? '只读' : saving ? '保存中' : agentBusy ? 'Agent 工作中' : '可编辑'}</span>
+    <span class="status" aria-live="polite" class:loading={loading || saving || surfaceState.dirty || locked || creationPending} class:save-error={surfaceState.error !== null}>{loading ? '加载中' : failed ? '不可用' : creationPending ? '未创建' : surfaceState.error ? '保存失败 · 草稿保留' : locked || surfaceState.readOnly ? '只读' : saving ? '保存中' : surfaceState.dirty ? '未保存' : '已保存'}</span>
   </header>
 
   {#if failed}
@@ -611,6 +781,46 @@
   {:else}
     <div class="workbench">
       <div class="document-shell" aria-busy={loading}>
+        <div class="editor-toolbar" role="toolbar" aria-label="Markdown 编辑工具">
+          <select aria-label="段落样式" disabled={editingDisabled} onchange={(event) => chooseBlockStyle(event.currentTarget.value)}>
+            <option value="paragraph">正文</option>
+            {#each [1, 2, 3, 4, 5, 6] as level}<option value={level}>标题 {level}</option>{/each}
+          </select>
+          {#each toolbarCommands as item}
+            <button title={item.title ?? item.label} aria-label={item.label} disabled={!canRun(item.command)} onmousedown={(event) => event.preventDefault()} onclick={() => runCommand(item.command)}>{item.label}</button>
+          {/each}
+          <button disabled={editingDisabled} onmousedown={(event) => event.preventDefault()} onclick={() => openAddressForm('link')}>插入链接</button>
+          <button disabled={!canRun({ kind: 'unlink' })} onmousedown={(event) => event.preventDefault()} onclick={() => runCommand({ kind: 'unlink' })}>移除链接</button>
+          <button disabled={editingDisabled} onmousedown={(event) => event.preventDefault()} onclick={() => openAddressForm('image')}>插入图片</button>
+          {#if canRun({ kind: 'table.add-row' })}
+            <div class="table-tools" role="group" aria-label="表格行列">
+              {#each tableCommands as item}<button disabled={!canRun(item.command)} onmousedown={(event) => event.preventDefault()} onclick={() => runCommand(item.command)}>{item.label}</button>{/each}
+              <small>Tab 切换单元格</small>
+            </div>
+          {/if}
+        </div>
+        {#if addressForm}
+          <form class="address-form" onsubmit={(event) => { event.preventDefault(); applyAddress() }}>
+            <label>{addressForm === 'link' ? '链接地址' : '图片地址'}<input bind:value={address} placeholder="https://…" required /></label>
+            <label>{addressForm === 'link' ? '显示文字（未选中文字时使用）' : '图片说明'}<input bind:value={addressLabel} /></label>
+            <div><button type="button" onclick={() => { addressForm = null }}>取消</button><button type="submit" disabled={!address.trim()}>确认插入</button></div>
+          </form>
+        {/if}
+        {#if surfaceState.error || lockedRecoveryMessage}
+          <section class="draft-recovery" role="alert">
+            <strong>{lockedRecoveryMessage ? '请保留当前草稿，重开后核对保存结果' : '尚未保存的草稿已保留'}</strong>
+            <p>{surfaceState.error?.message ?? lockedRecoveryMessage}</p>
+            <p>关闭窗口前请复制或下载草稿；本机恢复副本可能因存储受限而不可用。</p>
+            <div>
+              {#if !locked && surfaceState.error?.code === 'persistence-failed'}<button onclick={retrySave}>重试保存</button>{/if}
+              <button onclick={() => copyMarkdown(recoveryMarkdown, '草稿')}>复制草稿</button>
+              <button onclick={downloadDraft}>下载草稿</button>
+              {#if !locked}<button onclick={() => { discardConfirm = true }}>放弃本地草稿</button>{/if}
+            </div>
+            {#if discardConfirm}<p>确定丢弃这份未保存草稿并恢复最后提交版本？此操作无法恢复草稿，请先复制或下载。</p><div><button onclick={() => { editor?.surface.discardDraft(); discardConfirm = false }}>确认放弃草稿</button><button onclick={() => { discardConfirm = false }}>保留草稿</button></div>{/if}
+            <details><summary>查看草稿与最后提交版本</summary><label>未保存草稿<textarea readonly value={recoveryMarkdown} rows="6"></textarea></label><label>最后提交版本<textarea readonly value={session ? revisionMarkdown(session.snapshot()) : ''} rows="6"></textarea></label></details>
+          </section>
+        {/if}
         <div class="editor-host" bind:this={editorHost}></div>
       </div>
       <aside aria-label="协作活动与提案">
@@ -618,11 +828,12 @@
           <h3>文档操作</h3>
           <button onclick={insertAfterSelection} disabled={!editor || !session || locked}>在选中块后新增段落</button>
           <button onclick={deleteSelection} disabled={!editor || !session || locked}>删除选中块</button>
+          <div class="move-actions"><button onclick={() => moveSelection('up')} disabled={editingDisabled}>上移选中块</button><button onclick={() => moveSelection('down')} disabled={editingDisabled}>下移选中块</button></div>
           <label for="agent-instruction">给 Agent 的要求</label>
           <textarea id="agent-instruction" bind:value={agentInstruction} rows="3" disabled={agentBusy || locked}></textarea>
           <small class:agent-unavailable={!agentReadiness.ok}>{agentReadiness.ok ? `由 ${agentReadiness.label} 在 input-only 隔离中处理` : agentReadiness.message}</small>
-          <button onclick={() => startAgentAction('suggest')} disabled={!editor || !session || saving || agentBusy || locked || !agentReadiness.ok}>让 Agent 建议改写选中块</button>
-          <button onclick={() => startAgentAction('assess')} disabled={!editor || !session || saving || agentBusy || locked || !agentReadiness.ok}>让 Agent 检查选中版本</button>
+          <button onclick={() => startAgentAction('suggest')} disabled={!editor || !session || agentBusy || locked || surfaceState.error !== null || !agentReadiness.ok}>让 Agent 建议改写选中块</button>
+          <button onclick={() => startAgentAction('assess')} disabled={!editor || !session || agentBusy || locked || surfaceState.error !== null || !agentReadiness.ok}>让 Agent 检查选中版本</button>
         </section>
 
         <section class="activity" aria-live="polite">
@@ -636,9 +847,11 @@
           {#each proposals as proposal (proposal.changeSetId)}
             <article class:conflicted={proposal.status === 'conflicted'}>
               <strong>{proposal.actorId}</strong>
-              <span>{operationSummary(proposal.batch.operations[0])}</span>
+              {#each proposal.batch.operations as operation (operation.operationId)}
+                <div class="proposal-operation"><span>{operationSummary(operation)}</span><small>基于 {operationBasis(operation)}</small></div>
+              {/each}
               {#if proposal.rationale}<small>{proposal.rationale}</small>{/if}
-              <small>{proposal.status} · 基于 {operationBasis(proposal.batch.operations[0])}</small>
+              <small>{proposal.status} · {proposal.batch.operations.length} 项修改</small>
               {#if proposal.status === 'pending'}
                 <div><button onclick={() => decide(proposal, 'reject')} disabled={saving || locked}>拒绝</button><button class="primary" onclick={() => decide(proposal, 'accept')} disabled={saving || locked}>接受</button></div>
               {/if}
@@ -646,6 +859,27 @@
           {:else}
             <p class="empty">暂无待处理提案。</p>
           {/each}
+        </section>
+
+        <section class="revision-history">
+          <h3>版本历史</h3>
+          <select aria-label="查看历史版本" value={selectedHistoryId} onchange={(event) => { selectedHistoryId = event.currentTarget.value; restoreConfirm = false }}>
+            <option value="">选择一个版本</option>
+            {#each history as revision, index (revision.revisionId)}<option value={revision.revisionId}>{index === 0 ? '当前 · ' : ''}{revision.revisionId}</option>{/each}
+          </select>
+          {#if selectedHistory}
+            <textarea aria-label="历史版本正文" readonly value={revisionMarkdown(selectedHistory)} rows="8"></textarea>
+            <button onclick={() => copyMarkdown(revisionMarkdown(selectedHistory!), '历史正文')}>复制历史正文</button>
+            {#if selectedHistory.revisionId !== session?.snapshot().revisionId}
+              {#if restoreConfirm}
+                <p>将先保存当前编辑，再把所选正文恢复为新版本。提案和检查记录仍保留。</p>
+                <button onclick={restoreHistoryRevision} disabled={editingDisabled || restoring || surfaceState.error !== null}>{restoring ? '恢复中…' : '确认恢复为新版本'}</button>
+                <button onclick={() => { restoreConfirm = false }} disabled={restoring}>取消恢复</button>
+              {:else}
+                <button onclick={() => { restoreConfirm = true }} disabled={editingDisabled || surfaceState.error !== null}>恢复这个版本的正文</button>
+              {/if}
+            {/if}
+          {/if}
         </section>
 
         <section class="assessment-list">
@@ -668,5 +902,10 @@
 </section>
 
 <style>
-  .cdr-spike{display:grid;gap:14px}.cdr-spike>header{display:flex;align-items:flex-start;justify-content:space-between;gap:20px}.cdr-spike h2{margin:2px 0 5px;font-size:20px}.cdr-spike header p:not(.eyebrow){max-width:720px;margin:0;color:color-mix(in srgb,CanvasText 62%,transparent);font-size:12px}.managed-path{display:block;margin-top:6px;color:color-mix(in srgb,CanvasText 48%,transparent);font:10px ui-monospace,SFMono-Regular,monospace}.eyebrow{margin:0;color:#0a84ff;font-size:11px;font-weight:750;letter-spacing:.04em;text-transform:uppercase}.status{flex:none;padding:4px 9px;border-radius:999px;background:color-mix(in srgb,#34c759 14%,Canvas);color:#168333;font-size:11px;font-weight:700}.status.loading{background:color-mix(in srgb,CanvasText 8%,Canvas);color:color-mix(in srgb,CanvasText 55%,transparent)}.create-panel{display:grid;justify-items:start;gap:10px;padding:24px;border:1px solid color-mix(in srgb,CanvasText 12%,transparent);border-radius:12px;background:Canvas}.create-panel p{max-width:680px;margin:0;color:color-mix(in srgb,CanvasText 62%,transparent);font-size:12px;line-height:1.55}.create-panel small{color:color-mix(in srgb,CanvasText 52%,transparent);font-size:11px}.creation-error{max-width:100%;overflow-wrap:anywhere;color:#d62d26;font-size:10px}.workbench{display:grid;grid-template-columns:minmax(0,1fr) 310px;min-height:540px;overflow:hidden;border:1px solid color-mix(in srgb,CanvasText 12%,transparent);border-radius:12px;background:Canvas}.document-shell{min-width:0;padding:28px 34px;overflow:auto;border-right:1px solid color-mix(in srgb,CanvasText 10%,transparent)}.editor-host{min-height:430px}.document-shell :global(.kit-host){height:100%;min-height:430px}.document-shell :global(.moraya-editor){min-height:410px;padding:0;outline:0}.workbench aside{display:grid;align-content:start;gap:14px;padding:16px;overflow:auto;background:color-mix(in srgb,CanvasText 2.5%,Canvas)}aside section{display:grid;gap:7px}aside h3{margin:0;font-size:12px}.actions label{color:color-mix(in srgb,CanvasText 58%,transparent);font-size:11px}.actions textarea{width:100%;resize:vertical;border:1px solid color-mix(in srgb,CanvasText 14%,transparent);border-radius:8px;padding:7px 8px;background:Canvas;color:CanvasText;font:inherit;line-height:1.4}.actions small{color:color-mix(in srgb,CanvasText 52%,transparent);font-size:10px}.actions small.agent-unavailable{color:#d62d26}.actions button{width:100%;text-align:left}.activity{padding:11px;border-radius:9px;background:color-mix(in srgb,#0a84ff 8%,Canvas)}.activity p{margin:0;font-size:12px;line-height:1.5}.activity small,.proposal-list small{color:color-mix(in srgb,CanvasText 52%,transparent);font-size:10px}.proposal-list article{display:grid;gap:6px;padding:10px;border:1px solid color-mix(in srgb,#ff9f0a 30%,transparent);border-radius:9px;background:Canvas}.proposal-list article.conflicted{border-color:color-mix(in srgb,#ff3b30 38%,transparent)}.proposal-list article>strong{font-size:11px}.proposal-list article>span{font-size:12px;white-space:pre-wrap}.proposal-list article>div{display:flex;justify-content:flex-end;gap:6px}.assessment-list p{display:grid;gap:2px;margin:0;padding:9px;border-radius:8px;background:Canvas;font-size:11px}.assessment-list p.outdated{background:color-mix(in srgb,#ff3b30 7%,Canvas)}.assessment-list span{color:color-mix(in srgb,CanvasText 54%,transparent);font-size:10px}.assessment-list small{color:color-mix(in srgb,CanvasText 52%,transparent);font-size:10px}.assessment-list p.outdated small:last-child{color:#d62d26}.empty{margin:0;color:color-mix(in srgb,CanvasText 45%,transparent);font-size:11px}.failure{display:grid;gap:4px;padding:18px;border:1px solid color-mix(in srgb,#ff3b30 35%,transparent);border-radius:10px;background:color-mix(in srgb,#ff3b30 7%,Canvas)}.failure span{font:11px ui-monospace,SFMono-Regular,monospace}.primary{background:#0a84ff!important;color:#fff!important}@media(max-width:800px){.workbench{grid-template-columns:1fr}.document-shell{border-right:0;border-bottom:1px solid color-mix(in srgb,CanvasText 10%,transparent)}.workbench aside{grid-template-columns:repeat(2,minmax(0,1fr))}.activity{grid-column:1/-1}}@media(max-width:580px){.cdr-spike>header{display:block}.status{display:inline-block;margin-top:10px}.document-shell{padding:20px}.workbench aside{grid-template-columns:1fr}.activity{grid-column:auto}}
+  .editor-toolbar{display:flex;flex-wrap:wrap;gap:5px;align-items:center;position:sticky;top:-28px;z-index:2;margin:-12px -16px 18px;padding:10px 12px;background:Canvas;border-bottom:1px solid color-mix(in srgb,CanvasText 12%,transparent)}
+  .editor-toolbar select{width:auto;min-width:90px}
+  .workbench aside{min-width:0;grid-template-columns:minmax(0,1fr);overflow-wrap:anywhere}aside section,aside article{min-width:0}.move-actions button{min-width:0;flex:1}
+  .editor-toolbar button,.editor-toolbar select{min-height:29px;padding:4px 7px;font-size:11px}.editor-toolbar button:disabled{opacity:.35}.table-tools{display:flex;flex-wrap:wrap;gap:5px;width:100%;align-items:center}.table-tools small{font-size:10px;color:color-mix(in srgb,CanvasText 55%,transparent)}
+  .address-form,.draft-recovery{display:grid;gap:9px;margin:0 0 16px;padding:12px;border:1px solid color-mix(in srgb,#0a84ff 25%,Canvas);border-radius:8px;background:color-mix(in srgb,#0a84ff 4%,Canvas)}.address-form label,.draft-recovery label{display:grid;gap:4px;font-size:11px}.address-form input,.draft-recovery textarea,.revision-history textarea,.revision-history select{width:100%;min-width:0;border:1px solid color-mix(in srgb,CanvasText 15%,transparent);border-radius:6px;padding:7px;background:Canvas;color:CanvasText;font:inherit}.address-form>div,.draft-recovery>div,.move-actions{display:flex;gap:6px}.draft-recovery{border-color:color-mix(in srgb,#ff9f0a 45%,Canvas);background:color-mix(in srgb,#ff9f0a 7%,Canvas)}.draft-recovery p,.revision-history p{margin:0;font-size:12px;line-height:1.5}.draft-recovery textarea,.revision-history textarea{font:11px/1.5 ui-monospace,SFMono-Regular,monospace;resize:vertical}.draft-recovery details{font-size:12px}.draft-recovery details label{margin-top:9px}.status.save-error{color:#ab5d00;background:color-mix(in srgb,#ff9f0a 15%,Canvas)}.proposal-operation{display:grid!important;gap:4px;justify-content:stretch!important;border-bottom:1px solid color-mix(in srgb,CanvasText 8%,transparent);padding-bottom:6px}.proposal-operation>span{font-size:12px;white-space:pre-wrap;overflow-wrap:anywhere}.revision-history{min-width:0}.revision-history select{font-size:11px}
+  .cdr-spike{display:grid;gap:14px}.cdr-spike>header{display:flex;align-items:flex-start;justify-content:space-between;gap:20px}.cdr-spike h2{margin:2px 0 5px;font-size:20px}.cdr-spike header p:not(.eyebrow){max-width:720px;margin:0;color:color-mix(in srgb,CanvasText 62%,transparent);font-size:12px}.managed-path{display:block;margin-top:6px;color:color-mix(in srgb,CanvasText 48%,transparent);font:10px ui-monospace,SFMono-Regular,monospace}.eyebrow{margin:0;color:#0a84ff;font-size:11px;font-weight:750;letter-spacing:.04em;text-transform:uppercase}.status{flex:none;padding:4px 9px;border-radius:999px;background:color-mix(in srgb,#34c759 14%,Canvas);color:#168333;font-size:11px;font-weight:700}.status.loading{background:color-mix(in srgb,CanvasText 8%,Canvas);color:color-mix(in srgb,CanvasText 55%,transparent)}.create-panel{display:grid;justify-items:start;gap:10px;padding:24px;border:1px solid color-mix(in srgb,CanvasText 12%,transparent);border-radius:12px;background:Canvas}.create-panel p{max-width:680px;margin:0;color:color-mix(in srgb,CanvasText 62%,transparent);font-size:12px;line-height:1.55}.create-panel small{color:color-mix(in srgb,CanvasText 52%,transparent);font-size:11px}.creation-error{max-width:100%;overflow-wrap:anywhere;color:#d62d26;font-size:10px}.workbench{display:grid;grid-template-columns:minmax(0,1fr) 310px;min-height:540px;overflow:hidden;border:1px solid color-mix(in srgb,CanvasText 12%,transparent);border-radius:12px;background:Canvas}.document-shell{min-width:0;padding:28px 34px;overflow:auto;border-right:1px solid color-mix(in srgb,CanvasText 10%,transparent)}.editor-host{min-height:430px}.document-shell :global(.kit-host){height:100%;min-height:430px}.document-shell :global(.moraya-editor){min-height:410px;padding:0;outline:0}.workbench aside{display:grid;align-content:start;gap:14px;padding:16px;overflow-x:clip;overflow-y:auto;background:color-mix(in srgb,CanvasText 2.5%,Canvas)}aside section{display:grid;gap:7px}aside h3{margin:0;font-size:12px}.actions label{color:color-mix(in srgb,CanvasText 58%,transparent);font-size:11px}.actions textarea{width:100%;resize:vertical;border:1px solid color-mix(in srgb,CanvasText 14%,transparent);border-radius:8px;padding:7px 8px;background:Canvas;color:CanvasText;font:inherit;line-height:1.4}.actions small{color:color-mix(in srgb,CanvasText 52%,transparent);font-size:10px}.actions small.agent-unavailable{color:#d62d26}.actions button{width:100%;text-align:left}.activity{padding:11px;border-radius:9px;background:color-mix(in srgb,#0a84ff 8%,Canvas)}.activity p{margin:0;font-size:12px;line-height:1.5}.activity small,.proposal-list small{color:color-mix(in srgb,CanvasText 52%,transparent);font-size:10px}.proposal-list article{display:grid;gap:6px;padding:10px;border:1px solid color-mix(in srgb,#ff9f0a 30%,transparent);border-radius:9px;background:Canvas}.proposal-list article.conflicted{border-color:color-mix(in srgb,#ff3b30 38%,transparent)}.proposal-list article>strong{font-size:11px}.proposal-list article>div{display:flex;justify-content:flex-end;gap:6px}.assessment-list p{display:grid;gap:2px;margin:0;padding:9px;border-radius:8px;background:Canvas;font-size:11px}.assessment-list p.outdated{background:color-mix(in srgb,#ff3b30 7%,Canvas)}.assessment-list span{color:color-mix(in srgb,CanvasText 54%,transparent);font-size:10px}.assessment-list small{color:color-mix(in srgb,CanvasText 52%,transparent);font-size:10px}.assessment-list p.outdated small:last-child{color:#d62d26}.empty{margin:0;color:color-mix(in srgb,CanvasText 45%,transparent);font-size:11px}.failure{display:grid;gap:4px;padding:18px;border:1px solid color-mix(in srgb,#ff3b30 35%,transparent);border-radius:10px;background:color-mix(in srgb,#ff3b30 7%,Canvas)}.failure span{font:11px ui-monospace,SFMono-Regular,monospace}.primary{background:#0a84ff!important;color:#fff!important}@media(max-width:800px){.workbench{grid-template-columns:1fr}.document-shell{border-right:0;border-bottom:1px solid color-mix(in srgb,CanvasText 10%,transparent)}.workbench aside{grid-template-columns:repeat(2,minmax(0,1fr))}.activity{grid-column:1/-1}}@media(max-width:580px){.cdr-spike>header{display:block}.status{display:inline-block;margin-top:10px}.document-shell{padding:20px}.workbench aside{grid-template-columns:1fr}.activity{grid-column:auto}}
 </style>

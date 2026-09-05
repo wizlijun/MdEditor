@@ -7,6 +7,10 @@ For the full commit history, see the git log.
 
 ## Unreleased
 
+### Fixed
+
+- **The collaborative Memory document supports whole-document editing.** Cross-block selection, cut/paste, clearing the document, trailing blank paragraphs and hard breaks now persist correctly, and saving no longer interrupts typing or IME input. Formatting, lists, links, images and tables have visible controls; unsaved drafts can be recovered, compared and retried. Block-aware undo checks its target before restoring text, including after an external move. The updated Memory plugin and host Editor Kit must be deployed together.
+
 ## v6.905.5 — 2026-09-05
 
 ### Changed

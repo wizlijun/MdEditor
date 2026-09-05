@@ -6,7 +6,7 @@
 // (that file cannot be imported here: it drags in tabs / insights / Tauri
 // adapters). Keep the two in sync when either changes.
 
-import { createEditor, setDocumentBaseDir, type MorayaEditorInstance } from '@moraya/core'
+import { createEditor, createEditorPlugins, parseMarkdown, setDocumentBaseDir, type CreateEditorOptions, type MorayaEditorInstance } from '@moraya/core'
 import { bridgeMediaResolver } from './media'
 // placeholder-plugin only depends on prosemirror-state/view — zero Tauri IPC,
 // so it clears the kit's dependency allowlist.
@@ -15,7 +15,8 @@ import { isApplePlatformSync } from '../lib/platform-sync'
 import { powerModePlugin, type ConfigGetter } from '../lib/power-mode/plugin'
 import { createImeGuard, guardRichEditor, type ImeGuard } from '../lib/ime'
 import { handleSelectAllKeydown, type SelectAllTarget } from '../lib/editor-select-all'
-import type { Plugin } from 'prosemirror-state'
+import { EditorState, type Plugin } from 'prosemirror-state'
+import type { Schema } from 'prosemirror-model'
 
 /** Base directory (absolute) used to resolve relative image paths in rich mode. */
 export function setKitBaseDir(absoluteDir: string): void {
@@ -97,8 +98,9 @@ export async function mountRich(
   onChange: (md: string) => void,
   placeholder?: string,
   getPowerMode?: ConfigGetter,
+  customizeSchema?: (schema: Schema) => Schema,
 ): Promise<MorayaEditorInstance> {
-  const instance = await createEditor({
+  const options: CreateEditorOptions = {
     container: host,
     initialContent: initial,
     mediaResolver: bridgeMediaResolver(vaultRoot),
@@ -118,7 +120,27 @@ export async function mountRich(
     inlineSyntaxScope: 'line',
     onChange,
     changeDebounceMs: 200,
-  })
+  }
+  const instance = await createEditor(options)
+  // The v2 surface needs internal node identity attributes that participate in
+  // native history. Rebuild schema-bound plugins once at mount; retain Moraya's
+  // NodeViews and lifecycle. v1 never takes this branch or changes its schema.
+  if (customizeSchema) {
+    const schema = customizeSchema(instance.view.state.schema)
+    const plugins = (await createEditorPlugins(options, schema)).filter((plugin) => {
+      const key = (plugin as unknown as { key: string }).key
+      // Governed content cannot treat focusing a link as an edit. These two
+      // live-preview plugins expand marks into literal source / insert cursor
+      // sentinel text. v2 uses real marks, decorations and explicit commands;
+      // v1 retains Moraya's original live-preview behavior unchanged.
+      return !key.startsWith('moraya-link-text$') && !key.startsWith('moraya-inline-code-convert$')
+    })
+    instance.view.updateState(EditorState.create({
+      schema,
+      doc: parseMarkdown(initial, schema),
+      plugins,
+    }))
+  }
 
   // Append the placeholder plugin after mount, same construction as the main
   // window's editor-append plugins in RichEditor.svelte (`view.updateState(

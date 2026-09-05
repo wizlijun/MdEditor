@@ -8,6 +8,14 @@ const mocks = vi.hoisted(() => ({
   destroy: vi.fn(async () => {}),
   setReadOnly: vi.fn(),
   executeStructuralCommand: vi.fn(() => true),
+  executeCommand: vi.fn((_command: { kind: string }) => true),
+  canExecuteCommand: vi.fn(() => true),
+  flush: vi.fn(async () => {}),
+  getDraftMarkdown: vi.fn(() => '保留的未保存草稿。'),
+  retryPending: vi.fn(() => true),
+  discardDraft: vi.fn(),
+  restoreRevision: vi.fn(() => true),
+  stateListener: null as ((state: any) => void) | null,
   selectedBlockId: vi.fn(() => 'b-d4e5f6'),
   setLayer: vi.fn(),
   removeLayer: vi.fn(),
@@ -32,6 +40,18 @@ vi.mock('./editor-kit-v2', () => ({
           return () => { mocks.localListener = null }
         },
         executeStructuralCommand: mocks.executeStructuralCommand,
+        executeCommand: mocks.executeCommand,
+        canExecuteCommand: mocks.canExecuteCommand,
+        flush: mocks.flush,
+        getDraftMarkdown: mocks.getDraftMarkdown,
+        retryPending: mocks.retryPending,
+        discardDraft: mocks.discardDraft,
+        restoreRevision: mocks.restoreRevision,
+        observeState(listener: (state: any) => void) {
+          mocks.stateListener = listener
+          listener({ dirty: false, saving: false, readOnly: false, error: null, selectedBlockId: 'b-d4e5f6' })
+          return () => { mocks.stateListener = null }
+        },
         selectedBlockId: mocks.selectedBlockId,
         setReadOnly: mocks.setReadOnly,
         destroy: mocks.destroy,
@@ -97,6 +117,7 @@ let agentHoldRunning = false
 let heldAgentStart: Promise<{ run_id: string }> | null = null
 let heldAgentStatus: Promise<unknown> | null = null
 let agentStatusCalls = 0
+let copiedText = ''
 let nextAgentResult: Record<string, unknown> = {
   schema: 'notemd.cdr/agent-result/v1',
   kind: 'suggestion',
@@ -109,6 +130,7 @@ function copy<T>(value: T): T {
 }
 
 async function hostRequest(method: string, params: any) {
+  if (method === 'host.clipboard.write') { copiedText = params.text; return { ok: true } }
   if (method === 'host.vault.info') return { root: vaultRoot, wiki_dir: wikiDirectory, author: vaultAuthor }
   if (method === 'host.vault.exists') return { exists: true }
   if (method === 'host.vault.write') return { ok: true }
@@ -226,6 +248,7 @@ beforeEach(() => {
   heldAgentStart = null
   heldAgentStatus = null
   agentStatusCalls = 0
+  copiedText = ''
   nextAgentResult = {
     schema: 'notemd.cdr/agent-result/v1',
     kind: 'suggestion',
@@ -252,6 +275,17 @@ afterEach(async () => {
   mocks.destroy.mockClear()
   mocks.executeStructuralCommand.mockClear()
   mocks.executeStructuralCommand.mockReturnValue(true)
+  mocks.executeCommand.mockClear()
+  mocks.executeCommand.mockReturnValue(true)
+  mocks.canExecuteCommand.mockClear()
+  mocks.canExecuteCommand.mockReturnValue(true)
+  mocks.flush.mockReset()
+  mocks.flush.mockResolvedValue(undefined)
+  mocks.getDraftMarkdown.mockClear()
+  mocks.retryPending.mockClear()
+  mocks.discardDraft.mockClear()
+  mocks.restoreRevision.mockClear()
+  mocks.stateListener = null
   mocks.selectedBlockId.mockClear()
   mocks.selectedBlockId.mockReturnValue('b-d4e5f6')
   mocks.setReadOnly.mockClear()
@@ -481,7 +515,7 @@ describe('CollaborativeDocumentSpike', () => {
 
     mocks.localListener?.(localBatch('stale-local-request', 'b-d4e5f6', '中文组合输入形成的本地草稿。'))
     await vi.waitFor(() => expect(mocks.reconcile).toHaveBeenCalledWith(expect.objectContaining({
-      kind: 'reject-local', requestId: 'stale-local-request',
+      kind: 'proposal-stored', requestId: 'stale-local-request',
     })))
 
     expect(document.body.textContent).toContain('本地文字已保存为待比较提案')
@@ -709,5 +743,126 @@ describe('CollaborativeDocumentSpike', () => {
     await vi.waitFor(() => expect(mocks.setReadOnly).toHaveBeenCalledWith(true))
     expect(document.body.textContent).toContain('无法核定本次保存结果')
     expect(mocks.reconcile.mock.calls.some(([update]) => update.kind === 'ack-local')).toBe(false)
+  })
+
+  it('exposes formatting and insertion commands while preventing toolbar mousedown from stealing the editor selection', async () => {
+    await render()
+    const event = new MouseEvent('mousedown', { bubbles: true, cancelable: true })
+    requireButton('粗体').dispatchEvent(event)
+    expect(event.defaultPrevented).toBe(true)
+    activate('粗体')
+    activate('任务列表')
+    activate('插入表格')
+    expect(mocks.executeCommand.mock.calls.map(([command]) => command.kind)).toEqual(['bold', 'task-list', 'table'])
+
+    const select = document.querySelector<HTMLSelectElement>('[aria-label="段落样式"]')!
+    select.value = '3'
+    select.dispatchEvent(new Event('change', { bubbles: true }))
+    expect(mocks.executeCommand).toHaveBeenLastCalledWith({ kind: 'heading', level: 3 })
+  })
+
+  it('inserts a link from the address form and cancels if the selected block changed', async () => {
+    await render()
+    activate('插入链接')
+    await vi.waitFor(() => expect(document.querySelector('.address-form')).not.toBeNull())
+    const input = document.querySelector<HTMLInputElement>('.address-form input')!
+    input.value = 'https://example.com/docs'
+    input.dispatchEvent(new Event('input', { bubbles: true }))
+    document.querySelector('form')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
+    flushSync()
+    expect(mocks.executeCommand).toHaveBeenLastCalledWith({ kind: 'link', href: 'https://example.com/docs', text: '' })
+    expect(document.querySelector('.address-form')).toBeNull()
+
+    activate('插入图片')
+    await vi.waitFor(() => expect(document.querySelector('.address-form')).not.toBeNull())
+    mocks.selectedBlockId.mockReturnValueOnce('other-block')
+    document.querySelector('form')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
+    flushSync()
+    expect(document.body.textContent).toContain('所选位置或正文版本已改变')
+    expect(mocks.executeCommand).toHaveBeenCalledTimes(1)
+  })
+
+  it('rejects a stale link form after an accepted Agent proposal changes the same block revision', async () => {
+    await render()
+    activate('插入链接')
+    await vi.waitFor(() => expect(document.querySelector('.address-form')).not.toBeNull())
+    const input = document.querySelector<HTMLInputElement>('.address-form input')!
+    input.value = 'https://example.com/old-selection'
+    input.dispatchEvent(new Event('input', { bubbles: true }))
+    activate('让 Agent 建议改写选中块')
+    await vi.waitFor(() => expect(document.body.textContent).toContain('Agent 建议已保存'))
+    activate('接受')
+    await vi.waitFor(() => expect(document.body.textContent).toContain('已保存采纳决定'))
+    document.querySelector('form')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
+    flushSync()
+    expect(mocks.executeCommand).not.toHaveBeenCalled()
+    expect(document.querySelector('.address-form')).toBeNull()
+    expect(document.body.textContent).toContain('所选位置或正文版本已改变')
+  })
+
+  it('distinguishes unsaved typing, saving and durable state independently from activity text', async () => {
+    await render()
+    const state = { dirty: true, saving: false, readOnly: false, error: null, selectedBlockId: 'b-d4e5f6' }
+    mocks.stateListener?.(state)
+    flushSync()
+    expect(document.querySelector('.status')?.textContent).toBe('未保存')
+    mocks.stateListener?.({ ...state, saving: true })
+    flushSync()
+    expect(document.querySelector('.status')?.textContent).toBe('保存中')
+    mocks.stateListener?.({ ...state, dirty: false })
+    flushSync()
+    expect(document.querySelector('.status')?.textContent).toBe('已保存')
+  })
+
+  it('preserves a failed draft for comparison, copy and explicit retry and confirms before discarding it', async () => {
+    await render()
+    mocks.stateListener?.({ dirty: true, saving: false, readOnly: false,
+      error: { code: 'persistence-failed', message: '磁盘暂时不可用' }, selectedBlockId: 'b-d4e5f6' })
+    flushSync()
+    expect(document.querySelector('.status')?.textContent).toContain('草稿保留')
+    expect(document.querySelector('.draft-recovery')?.textContent).toContain('关闭窗口前请复制或下载草稿')
+    expect(document.querySelector<HTMLTextAreaElement>('.draft-recovery textarea')?.value).toBe('保留的未保存草稿。')
+    activate('复制草稿')
+    await vi.waitFor(() => expect(copiedText).toBe('保留的未保存草稿。'))
+    activate('重试保存')
+    expect(mocks.retryPending).toHaveBeenCalledOnce()
+    activate('放弃本地草稿')
+    expect(mocks.discardDraft).not.toHaveBeenCalled()
+    activate('确认放弃草稿')
+    expect(mocks.discardDraft).toHaveBeenCalledOnce()
+  })
+
+  it('waits for the editor flush before launching Agent work and does not launch after a failed flush', async () => {
+    await render()
+    let release!: () => void
+    mocks.flush.mockImplementationOnce(() => new Promise<void>((resolve) => { release = resolve }))
+    activate('让 Agent 建议改写选中块')
+    expect(agentRunSequence).toBe(0)
+    release()
+    await vi.waitFor(() => expect(agentRunSequence).toBe(1))
+    await vi.waitFor(() => expect(document.body.textContent).toContain('Agent 建议已保存'))
+    mocks.flush.mockRejectedValueOnce(new Error('未保存的冲突草稿'))
+    activate('让 Agent 检查选中版本')
+    await vi.waitFor(() => expect(document.body.textContent).toContain('未保存的冲突草稿'))
+    expect(agentRunSequence).toBe(1)
+  })
+
+  it('offers historical body restoration only after an explicit confirmation and flushes around the new revision', async () => {
+    await render()
+    const original = mocks.mountSnapshots.at(-1)
+    mocks.localListener?.(localBatch('history-edit', 'b-d4e5f6', '稍后形成的新正文。'))
+    await vi.waitFor(() => expect(document.body.textContent).toContain('人类局部修改已保存'))
+    const select = document.querySelector<HTMLSelectElement>('[aria-label="查看历史版本"]')!
+    expect(Array.from(select.options).map((option) => option.value)).toContain(original.revisionId)
+    select.value = original.revisionId
+    select.dispatchEvent(new Event('change', { bubbles: true }))
+    await tick()
+    flushSync()
+    expect(document.querySelector<HTMLTextAreaElement>('[aria-label="历史版本正文"]')?.value).toContain('在这里记录')
+    activate('恢复这个版本的正文')
+    expect(mocks.restoreRevision).not.toHaveBeenCalled()
+    activate('确认恢复为新版本')
+    await vi.waitFor(() => expect(mocks.restoreRevision).toHaveBeenCalledWith(original))
+    expect(mocks.flush).toHaveBeenCalledTimes(2)
   })
 })

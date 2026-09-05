@@ -165,16 +165,22 @@ describe('PersistentDocumentSession', () => {
     expect(store.commitCount).toBe(commitsAfterOriginal)
   })
 
-  it('keeps the last committed state readable when persistence fails', async () => {
+  it('keeps the last committed state readable when an atomic clear fails persistence', async () => {
     const store = new FakeAggregateStore()
     const session = await PersistentDocumentSession.open(fixture(), sequentialIds('test'), store)
     const before = session.snapshot()
     store.failNextCommit = true
 
-    await expect(session.submit(replace('failed', 'block-a', 'block-a/1', '# Not durable'), 'human'))
+    const replacement = replace('failed', 'block-a', 'block-a/1', '')
+    await expect(session.submit({ ...replacement, operations: [...replacement.operations, {
+      kind: 'block.delete', operationId: 'clear-b',
+      target: { blockId: 'block-b', expectedBlockRevision: 'block-b/1' }, payload: {},
+    }] }, 'human'))
       .rejects.toBeInstanceOf(RepositoryIOError)
     expect(session.snapshot()).toEqual(before)
     expect(session.audit()).toHaveLength(0)
+    expect((store.record?.aggregate as DocumentSessionState).head).toEqual(before)
+    expect(session.revisionHistory()).toHaveLength(0)
   })
 
   it('re-reads an ambiguous commit and treats an exact persisted candidate as success', async () => {

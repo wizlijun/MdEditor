@@ -69,13 +69,14 @@ function sameProfile(left: ProfileDescriptor, right: ProfileDescriptor): boolean
 
 function immutableBatch(value: OperationBatch): OperationBatch {
   const parsed = parseOperationBatch(value)
-  parsed.operations.forEach((operation) => {
-    Object.freeze(operation.target)
-    Object.freeze(operation.payload)
-    Object.freeze(operation)
-  })
-  Object.freeze(parsed.operations)
-  return Object.freeze(parsed)
+  const freeze = (value: object): void => {
+    for (const child of Object.values(value)) {
+      if (child && typeof child === 'object') freeze(child)
+    }
+    Object.freeze(value)
+  }
+  freeze(parsed)
+  return parsed
 }
 
 export class CdrApplicationService {

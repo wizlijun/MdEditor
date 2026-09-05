@@ -1,8 +1,12 @@
 // @vitest-environment happy-dom
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { createEditor, createSchema, parseMarkdown, serializeMarkdown } from '@moraya/core'
+import { createEditor, createEditorPlugins, createSchema, parseMarkdown, serializeMarkdown } from '@moraya/core'
+import type { Schema } from 'prosemirror-model'
 import { EditorState, NodeSelection, TextSelection } from 'prosemirror-state'
 import { EditorView } from 'prosemirror-view'
+import { applyDocumentChange } from '../lib/cdr/core'
+import { operationContentWrites, type Operation } from '../lib/cdr/operation'
+import type { EditorSurface, EditorSurfaceState } from './contract'
 
 const mocks = vi.hoisted(() => ({
   mountRich: vi.fn(),
@@ -33,8 +37,9 @@ const mediaResolver = {
   loadRemoteMedia: async (url: string) => url,
 }
 
-function makeRich(host: HTMLElement, initialMarkdown: string) {
-  const schema = createSchema({ mediaResolver })
+function makeRich(host: HTMLElement, initialMarkdown: string, _root?: string, _change?: unknown, _placeholder?: unknown, _power?: unknown, customizeSchema?: (schema: Schema) => Schema) {
+  const baseSchema = createSchema({ mediaResolver })
+  const schema = customizeSchema ? customizeSchema(baseSchema) : baseSchema
   const view = new EditorView(host, {
     state: EditorState.create({ schema, doc: parseMarkdown(initialMarkdown, schema) }),
   })
@@ -50,8 +55,8 @@ function makeRich(host: HTMLElement, initialMarkdown: string) {
   }
 }
 
-async function makeMorayaRich(host: HTMLElement, initialMarkdown: string) {
-  return createEditor({
+async function makeMorayaRich(host: HTMLElement, initialMarkdown: string, _root?: string, _change?: unknown, _placeholder?: unknown, _power?: unknown, customizeSchema?: (schema: Schema) => Schema) {
+  const options = {
     container: host,
     initialContent: initialMarkdown,
     mediaResolver,
@@ -61,8 +66,14 @@ async function makeMorayaRich(host: HTMLElement, initialMarkdown: string) {
     enableImageSelection: false,
     enableHistory: true,
     enableInlineMarkInputRules: false,
-    inlineSyntaxScope: 'line',
-  })
+    inlineSyntaxScope: 'line' as const,
+  }
+  const editor = await createEditor(options)
+  if (customizeSchema) {
+    const schema = customizeSchema(editor.view.state.schema)
+    editor.view.updateState(EditorState.create({ schema, doc: parseMarkdown(initialMarkdown, schema), plugins: await createEditorPlugins(options, schema) }))
+  }
+  return editor
 }
 
 function pastePlainText(target: HTMLElement, text: string): void {
@@ -113,15 +124,33 @@ function replaceOperation(
   }
 }
 
+async function ackLocal(surface: EditorSurface, batch: LocalOperationBatch, base = snapshot(), revisionId = 'revision-2') {
+  const authoritative = applyDocumentChange(base, batch, {
+    revisionId,
+    blockRevisions: Object.fromEntries(batch.operations.flatMap(operationContentWrites)
+      .map((write) => [write.blockId, `${write.blockId}/${revisionId}`])),
+  })
+  await surface.reconcile({ kind: 'ack-local', requestId: batch.requestId, authoritative, includedChangeIds: [] })
+  return authoritative
+}
+
+function contentOf(operation: Operation): string {
+  if (operation.kind !== 'block.replace' && operation.kind !== 'block.insert') {
+    throw new Error(`Operation ${operation.kind} has no text content`)
+  }
+  return operation.payload.content
+}
+
 describe('Editor Kit v2', () => {
   beforeEach(() => {
+    localStorage.clear()
     document.head.innerHTML = ''
     document.body.innerHTML = ''
     const stylesheet = document.createElement('link')
     stylesheet.href = 'data:text/css,/*editor-kit-v1.css'
     document.head.appendChild(stylesheet)
     mocks.mountRich.mockReset()
-    mocks.mountRich.mockImplementation(async (host: HTMLElement, markdown: string) => makeRich(host, markdown))
+    mocks.mountRich.mockImplementation(async (...args: Parameters<typeof makeRich>) => makeRich(...args))
   })
 
   it('emits one block replace, treats ack as metadata-only, and applies another block remotely', async () => {
@@ -146,7 +175,7 @@ describe('Editor Kit v2', () => {
       kind: 'ack-local',
       requestId: batches[0].requestId,
       authoritative: authoritativeSnapshot('revision-2', {
-        'block-a': { blockRevision: 'block-a/2', markdown: batches[0].operations[0].payload.content },
+        'block-a': { blockRevision: 'block-a/2', markdown: contentOf(batches[0].operations[0]) },
       }),
       includedChangeIds: [],
     })
@@ -172,7 +201,7 @@ describe('Editor Kit v2', () => {
     expect(batches).toHaveLength(1)
   })
 
-  it('uses explicit commands for optimistic insert/delete and rolls back by stable block identity', async () => {
+  it('uses explicit insert/delete commands and preserves the failed deletion until explicitly discarded', async () => {
     let sequence = 0
     const mounted = await mountDocumentEditor(document.body, {
       snapshot: snapshot(),
@@ -236,6 +265,8 @@ describe('Editor Kit v2', () => {
       authoritative: inserted,
       includedChangeIds: [],
     })
+    expect(rich.getMarkdown()).not.toContain('New context.')
+    mounted.surface.discardDraft()
     expect(rich.getMarkdown()).toContain('New context.')
     expect(rich.view.dom.querySelectorAll('[data-cdr-block-id="block-c"]')).toHaveLength(1)
   })
@@ -325,7 +356,7 @@ describe('Editor Kit v2', () => {
     await vi.waitFor(() => expect(rich.getMarkdown()).not.toContain('Queued structure.'))
   })
 
-  it('queues an explicit structural command during composition and never deletes the last block', async () => {
+  it('keeps composition intact until completion and clearing the final block retains its identity', async () => {
     const mounted = await mountDocumentEditor(document.body, {
       snapshot: snapshot(),
       ids: { requestId: () => 'request', operationId: () => 'operation', blockId: () => 'block-c' },
@@ -335,17 +366,27 @@ describe('Editor Kit v2', () => {
     mounted.surface.observeLocalOperations((batch) => batches.push(batch))
     rich.view.dom.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true }))
     expect(mounted.surface.executeStructuralCommand({
-      kind: 'block.insert-after', blockId: 'block-a', content: 'Queued after IME.',
-    })).toBe(true)
+      kind: 'block.insert-after', blockId: 'block-a', content: 'After IME.',
+    })).toBe(false)
+    expect(batches).toHaveLength(0)
     rich.view.dom.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true }))
+    await vi.waitFor(() => expect(mounted.surface.canExecuteCommand({ kind: 'bold' })).toBe(true))
+    expect(mounted.surface.executeStructuralCommand({
+      kind: 'block.insert-after', blockId: 'block-a', content: 'After IME.',
+    })).toBe(true)
     await vi.waitFor(() => expect(batches).toHaveLength(1))
-    expect(rich.getMarkdown()).toContain('Queued after IME.')
+    expect(rich.getMarkdown()).toContain('After IME.')
 
     const single = await mountDocumentEditor(document.body, {
-      snapshot: { ...snapshot(), blocks: [snapshot().blocks[0]] },
+      snapshot: { ...snapshot(), documentId: 'single-document', blocks: [snapshot().blocks[0]] },
       ids: { requestId: () => 'single-request', operationId: () => 'single-operation' },
     })
-    expect(single.surface.executeStructuralCommand({ kind: 'block.delete', blockId: 'block-a' })).toBe(false)
+    const singleBatches: LocalOperationBatch[] = []
+    single.surface.observeLocalOperations((batch) => singleBatches.push(batch))
+    expect(single.surface.executeStructuralCommand({ kind: 'block.delete', blockId: 'block-a' })).toBe(true)
+    await vi.waitFor(() => expect(singleBatches).toHaveLength(1))
+    expect(singleBatches[0].operations).toMatchObject([{ kind: 'block.replace',
+      target: { blockId: 'block-a' }, payload: { content: '' } }])
   })
 
   it('does not expose one block identity for a cross-block selection', async () => {
@@ -417,9 +458,10 @@ describe('Editor Kit v2', () => {
 
   it('accepts multi-paragraph paste-shaped replacement inside one block', async () => {
     const blocked = vi.fn()
+    let sequence = 0
     const mounted = await mountDocumentEditor(document.body, {
       snapshot: snapshot(),
-      ids: { requestId: () => 'request-paste', operationId: () => 'operation-paste' },
+      ids: { requestId: () => 'request-paste', operationId: () => `operation-paste-${++sequence}` },
       onBlockedStructuralEdit: blocked,
     })
     const rich = await mocks.mountRich.mock.results[0].value
@@ -436,9 +478,11 @@ describe('Editor Kit v2', () => {
 
     expect(blocked).not.toHaveBeenCalled()
     expect(batches).toHaveLength(1)
-    expect(batches[0].operations[0]).toMatchObject({ target: { blockId: 'block-a' } })
-    expect(batches[0].operations[0].payload.content).toContain('# Pasted heading')
-    expect(batches[0].operations[0].payload.content).toContain('- one')
+    expect(batches[0].operations).toMatchObject([{ kind: 'block.replace', target: { blockId: 'block-a' } }])
+    const committed = await ackLocal(mounted.surface, batches[0])
+    expect(committed.blocks.map((block) => block.markdown).join('\n\n')).toContain('# Pasted heading')
+    expect(committed.blocks.map((block) => block.markdown).join('\n\n')).toContain('- one')
+    expect(committed.blocks.find((block) => block.blockId === 'block-b')).toEqual(snapshot().blocks[1])
     expect(rich.view.dom.querySelectorAll('[data-cdr-block-id="block-b"]')).toHaveLength(2)
   })
 
@@ -464,7 +508,7 @@ describe('Editor Kit v2', () => {
     expect(handled).toBe(true)
     expect(batches).toHaveLength(1)
     expect(batches[0].operations[0]).toMatchObject({ target: { blockId: 'block-b' } })
-    expect(batches[0].operations[0].payload.content).toContain('\n\n')
+    expect(contentOf(batches[0].operations[0])).toContain('\n\n')
   })
 
   it('accepts Shift+Enter through the real Moraya keymap inside one governed block', async () => {
@@ -491,7 +535,7 @@ describe('Editor Kit v2', () => {
     expect(handled).toBe(true)
     expect(batches).toHaveLength(1)
     expect(batches[0].operations[0]).toMatchObject({ target: { blockId: 'block-b' } })
-    expect(batches[0].operations[0].payload.content).toContain('  \n')
+    expect(contentOf(batches[0].operations[0])).toContain('  \n')
   })
 
   it('accepts a real multi-paragraph clipboard paste inside one governed block', async () => {
@@ -515,7 +559,7 @@ describe('Editor Kit v2', () => {
 
     expect(batches).toHaveLength(1)
     expect(batches[0].operations[0]).toMatchObject({ target: { blockId: 'block-b' } })
-    expect(batches[0].operations[0].payload.content).toContain('粘贴第一段\n\n粘贴第二段')
+    expect(contentOf(batches[0].operations[0])).toContain('粘贴第一段\n\n粘贴第二段')
   })
 
   it('keeps real Moraya undo and redo working after an Enter revision is acknowledged', async () => {
@@ -540,7 +584,7 @@ describe('Editor Kit v2', () => {
     await Promise.resolve()
     expect(batches).toHaveLength(1)
 
-    const entered = batches[0].operations[0].payload.content
+    const entered = contentOf(batches[0].operations[0])
     const documentBeforeAck = rich.view.state.doc
     await mounted.surface.reconcile({
       kind: 'ack-local',
@@ -556,7 +600,7 @@ describe('Editor Kit v2', () => {
       new KeyboardEvent('keydown', { key: 'z', ctrlKey: true, bubbles: true, cancelable: true })))
     await vi.waitFor(() => expect(batches).toHaveLength(2))
     expect(undoHandled).toBe(true)
-    expect(batches[1].operations[0].payload.content).toBe(snapshot().blocks[1].markdown)
+    expect(contentOf(batches[1].operations[0])).toBe(snapshot().blocks[1].markdown)
 
     await mounted.surface.reconcile({
       kind: 'ack-local',
@@ -573,7 +617,7 @@ describe('Editor Kit v2', () => {
       })))
     await vi.waitFor(() => expect(batches).toHaveLength(3))
     expect(redoHandled).toBe(true)
-    expect(batches[2].operations[0].payload.content).toBe(entered)
+    expect(contentOf(batches[2].operations[0])).toBe(entered)
     expect(blocked).not.toHaveBeenCalled()
   })
 
@@ -597,13 +641,13 @@ describe('Editor Kit v2', () => {
 
     expect(batches).toHaveLength(1)
     expect(batches[0].operations[0]).toMatchObject({ target: { blockId: 'block-b' } })
-    expect(batches[0].operations[0].payload.content).toContain('\n')
+    expect(contentOf(batches[0].operations[0])).toContain('\n')
 
     await mounted.surface.reconcile({
       kind: 'ack-local',
       requestId: batches[0].requestId,
       authoritative: authoritativeSnapshot('revision-2', {
-        'block-b': { blockRevision: 'block-b/2', markdown: batches[0].operations[0].payload.content },
+        'block-b': { blockRevision: 'block-b/2', markdown: contentOf(batches[0].operations[0]) },
       }),
       includedChangeIds: [],
     })
@@ -616,32 +660,33 @@ describe('Editor Kit v2', () => {
     expect(batches[1].operations[0]).toMatchObject({ target: { blockId: 'block-b' } })
   })
 
-  it('accepts a paragraph join inside one block but rejects a join across governed blocks', async () => {
+  it('normalizes joins across governed boundaries while preserving the surviving block identity', async () => {
+    let sequence = 0
     const blocked = vi.fn()
     const mounted = await mountDocumentEditor(document.body, {
       snapshot: snapshot(),
-      ids: { requestId: () => 'request-join', operationId: () => 'operation-join' },
+      ids: { requestId: () => `request-${++sequence}`, operationId: () => `operation-${++sequence}` },
       onBlockedStructuralEdit: blocked,
     })
     const rich = await mocks.mountRich.mock.results[0].value
     const batches: LocalOperationBatch[] = []
     mounted.surface.observeLocalOperations((batch) => batches.push(batch))
-    const governedBoundary = rich.view.state.doc.child(0).nodeSize
-    rich.view.dispatch(rich.view.state.tr.join(governedBoundary))
-    await Promise.resolve()
-
-    expect(batches).toHaveLength(0)
-    expect(blocked).toHaveBeenCalledOnce()
-
-    const internalBoundary = rich.view.state.doc.child(0).nodeSize + rich.view.state.doc.child(1).nodeSize
-    rich.view.dispatch(rich.view.state.tr.join(internalBoundary))
-    await Promise.resolve()
-
-    expect(batches).toHaveLength(1)
-    expect(batches[0].operations[0]).toMatchObject({ target: { blockId: 'block-b' } })
+    rich.view.dispatch(rich.view.state.tr.join(rich.view.state.doc.child(0).nodeSize))
+    await vi.waitFor(() => expect(batches).toHaveLength(1))
+    expect(blocked).not.toHaveBeenCalled()
+    expect(rich.getMarkdown()).toContain('HeadingSecond paragraph.')
+    expect(batches[0].operations.some((operation) => operation.kind === 'block.replace'
+      && operation.target.blockId === 'block-a')).toBe(true)
+    const committed = await ackLocal(mounted.surface, batches[0])
+    rich.view.dispatch(rich.view.state.tr.join(rich.view.state.doc.child(0).nodeSize))
+    await vi.waitFor(() => expect(batches).toHaveLength(2))
+    const joined = await ackLocal(mounted.surface, batches[1], committed, 'revision-3')
+    expect(joined.blocks[0].blockId).toBe('block-a')
+    expect(joined.blocks).toHaveLength(1)
+    expect(rich.getMarkdown()).toContain('Third paragraph.')
   })
 
-  it('rejects clearing a governed block because durable blocks cannot be empty', async () => {
+  it('allows clearing a governed block without losing its stable identity', async () => {
     const blocked = vi.fn()
     const mounted = await mountDocumentEditor(document.body, {
       snapshot: snapshot(),
@@ -652,15 +697,16 @@ describe('Editor Kit v2', () => {
     const batches: LocalOperationBatch[] = []
     mounted.surface.observeLocalOperations((batch) => batches.push(batch))
     const blockBStart = rich.view.state.doc.child(0).nodeSize
-
     rich.view.dispatch(rich.view.state.tr
       .setSelection(TextSelection.create(rich.view.state.doc, blockBStart + 1, rich.view.state.doc.content.size - 1))
       .deleteSelection())
-    await Promise.resolve()
-
-    expect(batches).toHaveLength(0)
-    expect(blocked).toHaveBeenCalledOnce()
-    expect(rich.getMarkdown()).toContain('Second paragraph.')
+    await vi.waitFor(() => expect(batches).toHaveLength(1))
+    expect(blocked).not.toHaveBeenCalled()
+    expect(batches[0].operations).toMatchObject([{ kind: 'block.replace',
+      target: { blockId: 'block-b' }, payload: { content: '' } }])
+    await ackLocal(mounted.surface, batches[0])
+    expect(rich.getMarkdown()).not.toContain('Second paragraph.')
+    expect(rich.view.dom.querySelector('[data-cdr-block-id="block-b"]')).not.toBeNull()
   })
 
   it('leaves native copy as a read-only browser action with no governed operation', async () => {
@@ -704,14 +750,14 @@ describe('Editor Kit v2', () => {
       expect(batches).toHaveLength(0)
       await vi.advanceTimersByTimeAsync(1)
       expect(batches).toHaveLength(1)
-      expect(batches[0].operations[0].payload.content).toContain('HeadingABC')
-      expect(rich.view.editable).toBe(false)
+      expect(contentOf(batches[0].operations[0])).toContain('HeadingABC')
+      expect(rich.view.editable).toBe(true)
 
       await mounted.surface.reconcile({
         kind: 'ack-local',
         requestId: batches[0].requestId,
         authoritative: authoritativeSnapshot('revision-2', {
-          'block-a': { blockRevision: 'block-a/2', markdown: batches[0].operations[0].payload.content },
+          'block-a': { blockRevision: 'block-a/2', markdown: contentOf(batches[0].operations[0]) },
         }),
         includedChangeIds: [],
       })
@@ -721,7 +767,7 @@ describe('Editor Kit v2', () => {
     }
   })
 
-  it('queues the first structural command after blur until the current edit is acknowledged', async () => {
+  it('shows the first structural command immediately after blur and submits it after the current acknowledgement', async () => {
     let requestSequence = 0
     let operationSequence = 0
     const mounted = await mountDocumentEditorBase(document.body, {
@@ -746,19 +792,19 @@ describe('Editor Kit v2', () => {
 
     expect(batches).toHaveLength(1)
     expect(batches[0].operations[0]).toMatchObject({ kind: 'block.replace', target: { blockId: 'block-a' } })
-    expect(rich.getMarkdown()).not.toContain('Queued paragraph.')
+    expect(rich.getMarkdown()).toContain('Queued paragraph.')
 
     await mounted.surface.reconcile({
       kind: 'ack-local',
       requestId: batches[0].requestId,
       authoritative: authoritativeSnapshot('revision-2', {
-        'block-a': { blockRevision: 'block-a/2', markdown: batches[0].operations[0].payload.content },
+        'block-a': { blockRevision: 'block-a/2', markdown: contentOf(batches[0].operations[0]) },
       }),
       includedChangeIds: [],
     })
     await Promise.resolve()
 
-    expect(batches).toHaveLength(2)
+    await vi.waitFor(() => expect(batches).toHaveLength(2))
     expect(batches[1]).toMatchObject({
       baseRevisionId: 'revision-2',
       operations: [{
@@ -770,132 +816,78 @@ describe('Editor Kit v2', () => {
     expect(rich.getMarkdown()).toContain('Queued paragraph.')
   })
 
-  it('runs a queued structural command after a deferred resync reaches a stable head', async () => {
-    let requestSequence = 0
-    let operationSequence = 0
-    const resyncRequired = vi.fn()
-    const mounted = await mountDocumentEditorBase(document.body, {
+  it('defers resync until an in-flight edit and later structural draft are both acknowledged', async () => {
+    let sequence = 0
+    const requestFreshResync = vi.fn()
+    const mounted = await mountDocumentEditor(document.body, {
       snapshot: snapshot(),
-      ids: {
-        requestId: () => `request-${++requestSequence}`,
-        operationId: () => `operation-${++operationSequence}`,
-        blockId: () => 'block-c',
-      },
-      localChangeDebounceMs: 250,
-      onResyncRequired: resyncRequired,
+      ids: { requestId: () => `request-${++sequence}`, operationId: () => `operation-${++sequence}`, blockId: () => 'block-c' },
+      onResyncRequired: requestFreshResync,
     })
     const rich = await mocks.mountRich.mock.results[0].value
     const batches: LocalOperationBatch[] = []
     mounted.surface.observeLocalOperations((batch) => batches.push(batch))
     rich.view.dispatch(rich.view.state.tr.insertText(' edited', 8))
-    await mounted.surface.reconcile({
-      kind: 'resync', snapshot: authoritativeSnapshot('stale-resync', {}), includedChangeIds: [],
-    })
-    expect(mounted.surface.executeStructuralCommand({
-      kind: 'block.insert-after', blockId: 'block-a', content: 'After resync.',
-    })).toBe(true)
-    await Promise.resolve()
-
-    await mounted.surface.reconcile({
-      kind: 'ack-local',
-      requestId: batches[0].requestId,
-      authoritative: authoritativeSnapshot('revision-2', {
-        'block-a': { blockRevision: 'block-a/2', markdown: batches[0].operations[0].payload.content },
-      }),
-      includedChangeIds: [],
-    })
-    expect(resyncRequired).toHaveBeenCalledOnce()
-    expect(batches).toHaveLength(1)
-
-    await mounted.surface.reconcile({
-      kind: 'resync',
-      snapshot: authoritativeSnapshot('revision-2', {
-        'block-a': { blockRevision: 'block-a/2', markdown: batches[0].operations[0].payload.content },
-      }),
-      includedChangeIds: [],
-    })
-    await Promise.resolve()
-
+    await vi.waitFor(() => expect(batches).toHaveLength(1))
+    await mounted.surface.reconcile({ kind: 'resync', snapshot: authoritativeSnapshot('stale-resync', {}), includedChangeIds: [] })
+    expect(mounted.surface.executeStructuralCommand({ kind: 'block.insert-after', blockId: 'block-a', content: 'After resync.' })).toBe(true)
+    const committed = await ackLocal(mounted.surface, batches[0])
+    await vi.waitFor(() => expect(batches).toHaveLength(2))
+    expect(requestFreshResync).not.toHaveBeenCalled()
+    const next = await ackLocal(mounted.surface, batches[1], committed, 'revision-3')
+    expect(requestFreshResync).toHaveBeenCalledOnce()
+    await mounted.surface.reconcile({ kind: 'resync', snapshot: next, includedChangeIds: [] })
+    expect(rich.getMarkdown()).toContain('After resync.')
     expect(batches).toHaveLength(2)
-    expect(batches[1]).toMatchObject({
-      baseRevisionId: 'revision-2',
-      operations: [{ kind: 'block.insert', payload: { content: 'After resync.' } }],
-    })
   })
 
-  it('drops a queued structural command when the surface becomes read-only', async () => {
+  it('retains a later structural draft and rejects flush waiters when the surface becomes read-only', async () => {
     let sequence = 0
-    const mounted = await mountDocumentEditorBase(document.body, {
+    const mounted = await mountDocumentEditor(document.body, {
       snapshot: snapshot(),
-      ids: {
-        requestId: () => `request-${++sequence}`,
-        operationId: () => `operation-${++sequence}`,
-        blockId: () => 'block-c',
-      },
-      localChangeDebounceMs: 250,
+      ids: { requestId: () => `request-${++sequence}`, operationId: () => `operation-${++sequence}`, blockId: () => 'block-c' },
     })
     const rich = await mocks.mountRich.mock.results[0].value
     const batches: LocalOperationBatch[] = []
     mounted.surface.observeLocalOperations((batch) => batches.push(batch))
     rich.view.dispatch(rich.view.state.tr.insertText(' edited', 8))
-    expect(mounted.surface.executeStructuralCommand({
-      kind: 'block.insert-after', blockId: 'block-a', content: 'Must not appear.',
-    })).toBe(true)
-    await Promise.resolve()
+    await vi.waitFor(() => expect(batches).toHaveLength(1))
+    expect(mounted.surface.executeStructuralCommand({ kind: 'block.insert-after', blockId: 'block-a', content: 'Preserved structure.' })).toBe(true)
+    const flushed = mounted.surface.flush()
+    const rejected = expect(flushed).rejects.toThrow()
     mounted.surface.setReadOnly(true)
-
-    await mounted.surface.reconcile({
-      kind: 'ack-local',
-      requestId: batches[0].requestId,
-      authoritative: authoritativeSnapshot('revision-2', {
-        'block-a': { blockRevision: 'block-a/2', markdown: batches[0].operations[0].payload.content },
-      }),
-      includedChangeIds: [],
-    })
-    await Promise.resolve()
-
-    expect(batches).toHaveLength(1)
-    expect(rich.getMarkdown()).not.toContain('Must not appear.')
-    mounted.surface.setReadOnly(false)
-    expect(mounted.surface.executeStructuralCommand({
-      kind: 'block.insert-after', blockId: 'block-a', content: 'Allowed later.',
-    })).toBe(true)
+    await rejected
+    await ackLocal(mounted.surface, batches[0])
+    expect(mounted.surface.getDraftMarkdown()).toContain('Preserved structure.')
+    expect(rich.view.editable).toBe(false)
+    expect(mounted.surface.executeStructuralCommand({ kind: 'block.delete', blockId: 'block-a' })).toBe(false)
   })
 
-  it('drops a queued structural command when the preceding edit is rejected', async () => {
+  it('keeps a later structural draft when the preceding save fails and retries serially', async () => {
     let sequence = 0
-    const mounted = await mountDocumentEditorBase(document.body, {
+    const mounted = await mountDocumentEditor(document.body, {
       snapshot: snapshot(),
-      ids: {
-        requestId: () => `request-${++sequence}`,
-        operationId: () => `operation-${++sequence}`,
-        blockId: () => 'block-c',
-      },
-      localChangeDebounceMs: 250,
+      ids: { requestId: () => `request-${++sequence}`, operationId: () => `operation-${++sequence}`, blockId: () => 'block-c' },
     })
     const rich = await mocks.mountRich.mock.results[0].value
     const batches: LocalOperationBatch[] = []
     mounted.surface.observeLocalOperations((batch) => batches.push(batch))
     rich.view.dispatch(rich.view.state.tr.insertText(' edited', 8))
-    expect(mounted.surface.executeStructuralCommand({
-      kind: 'block.insert-after', blockId: 'block-a', content: 'Rejected queue.',
-    })).toBe(true)
-    await Promise.resolve()
-
-    await mounted.surface.reconcile({
-      kind: 'reject-local',
-      requestId: batches[0].requestId,
-      reason: { code: 'persistence-failed', message: 'not saved' },
-      authoritative: snapshot(),
-      includedChangeIds: [],
-    })
-    await Promise.resolve()
-
+    await vi.waitFor(() => expect(batches).toHaveLength(1))
+    mounted.surface.executeStructuralCommand({ kind: 'block.insert-after', blockId: 'block-a', content: 'Preserved tail.' })
+    await mounted.surface.reconcile({ kind: 'reject-local', requestId: batches[0].requestId,
+      reason: { code: 'persistence-failed', message: 'not saved' }, authoritative: snapshot(), includedChangeIds: [] })
+    expect(mounted.surface.getDraftMarkdown()).toContain('Preserved tail.')
+    expect(rich.view.editable).toBe(true)
     expect(batches).toHaveLength(1)
-    expect(rich.getMarkdown()).not.toContain('Rejected queue.')
-    expect(mounted.surface.executeStructuralCommand({
-      kind: 'block.insert-after', blockId: 'block-a', content: 'Allowed later.',
-    })).toBe(true)
+    expect(mounted.surface.retryPending()).toBe(true)
+    expect(batches).toHaveLength(2)
+    expect(batches[1]).toEqual(batches[0])
+    const committed = await ackLocal(mounted.surface, batches[1])
+    await vi.waitFor(() => expect(batches).toHaveLength(3))
+    expect(batches[2].operations).toMatchObject([{ kind: 'block.insert', payload: { content: 'Preserved tail.' } }])
+    await ackLocal(mounted.surface, batches[2], committed, 'revision-3')
+    await expect(mounted.surface.flush()).resolves.toBeUndefined()
   })
 
   it('releases a queued remote update when local edits cancel back to the authoritative text', async () => {
@@ -927,7 +919,7 @@ describe('Editor Kit v2', () => {
           )],
         },
       })
-      expect(rich.getMarkdown()).not.toContain('远端更新')
+      expect(rich.getMarkdown()).toContain('远端更新')
 
       await vi.advanceTimersByTimeAsync(250)
 
@@ -950,14 +942,13 @@ describe('Editor Kit v2', () => {
       })
       const rich = await mocks.mountRich.mock.results[0].value
       rich.view.dispatch(rich.view.state.tr.insertText('X', 8))
-      rich.view.dispatch(rich.view.state.tr.delete(8, 9))
-
       await mounted.surface.reconcile({
         kind: 'resync',
         snapshot: authoritativeSnapshot('revision-stale', {}),
         includedChangeIds: [],
       })
       expect(requestFreshResync).not.toHaveBeenCalled()
+      rich.view.dispatch(rich.view.state.tr.delete(8, 9))
 
       await vi.advanceTimersByTimeAsync(250)
 
@@ -988,7 +979,7 @@ describe('Editor Kit v2', () => {
       await vi.advanceTimersByTimeAsync(250)
 
       expect(batches).toHaveLength(1)
-      expect(batches[0].operations[0].payload.content).toContain('before IME')
+      expect(contentOf(batches[0].operations[0])).toContain('before IME')
     } finally {
       vi.useRealTimers()
     }
@@ -1006,10 +997,13 @@ describe('Editor Kit v2', () => {
     rich.view.dom.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true }))
     rich.view.dispatch(rich.view.state.tr.insertText('中文', 2))
 
-    await mounted.surface.destroy()
-
-    expect(batches).toHaveLength(1)
-    expect(batches[0].operations[0].payload.content).toContain('中文')
+    const destroyed = mounted.surface.destroy()
+    await vi.waitFor(() => expect(batches).toHaveLength(1))
+    expect(rich.destroy).not.toHaveBeenCalled()
+    expect(contentOf(batches[0].operations[0])).toContain('中文')
+    await ackLocal(mounted.surface, batches[0])
+    await destroyed
+    expect(rich.destroy).toHaveBeenCalledOnce()
   })
 
   it('flushes a pending debounced edit before destroying the surface', async () => {
@@ -1024,31 +1018,34 @@ describe('Editor Kit v2', () => {
 
     rich.view.dispatch(rich.view.state.tr.insertText(' before close', 8))
     expect(batches).toHaveLength(0)
-    await mounted.surface.destroy()
-
-    expect(batches).toHaveLength(1)
-    expect(batches[0].operations[0].payload.content).toContain('Heading before close')
+    const destroyed = mounted.surface.destroy()
+    await vi.waitFor(() => expect(batches).toHaveLength(1))
+    expect(rich.destroy).not.toHaveBeenCalled()
+    expect(contentOf(batches[0].operations[0])).toContain('Heading before close')
+    await ackLocal(mounted.surface, batches[0])
+    await destroyed
+    expect(rich.destroy).toHaveBeenCalledOnce()
   })
 
-  it('fails closed when a same-size transaction reorders top-level blocks', async () => {
-    const blocked = vi.fn()
+  it('preserves whole-block identity when a transaction reorders governed spans', async () => {
+    let sequence = 0
     const mounted = await mountDocumentEditor(document.body, {
       snapshot: snapshot(),
-      ids: { requestId: () => 'request', operationId: () => 'operation' },
-      onBlockedStructuralEdit: blocked,
+      ids: { requestId: () => `request-${++sequence}`, operationId: () => `operation-${++sequence}` },
     })
     const rich = await mocks.mountRich.mock.results[0].value
-    const before = rich.getMarkdown()
+    const batches: LocalOperationBatch[] = []
+    mounted.surface.observeLocalOperations((batch) => batches.push(batch))
     const swapped = rich.view.state.schema.topNodeType.create(null, [
-      rich.view.state.doc.child(1),
-      rich.view.state.doc.child(0),
-      rich.view.state.doc.child(2),
+      rich.view.state.doc.child(1), rich.view.state.doc.child(2), rich.view.state.doc.child(0),
     ])
     rich.view.dispatch(rich.view.state.tr.replaceWith(0, rich.view.state.doc.content.size, swapped.content))
-    await Promise.resolve()
-
-    expect(rich.getMarkdown()).toBe(before)
-    expect(blocked).toHaveBeenCalledOnce()
+    await vi.waitFor(() => expect(batches).toHaveLength(1))
+    expect(batches[0].operations).toHaveLength(1)
+    expect(batches[0].operations[0].kind).toBe('block.move')
+    const committed = await ackLocal(mounted.surface, batches[0])
+    expect(committed.blocks.map((block) => block.blockId)).toEqual(['block-b', 'block-a'])
+    expect(committed.blocks[0].markdown).toBe(snapshot().blocks[1].markdown)
   })
 
   it('maps edits and decorations across every top-level node in a multi-node block', async () => {
@@ -1073,8 +1070,8 @@ describe('Editor Kit v2', () => {
     expect(batches).toHaveLength(1)
     expect(batches[0].operations).toHaveLength(1)
     expect(batches[0].operations[0]).toMatchObject({ target: { blockId: 'block-b' } })
-    expect(batches[0].operations[0].payload.content).toContain('Second paragraph.')
-    expect(batches[0].operations[0].payload.content).toContain('updated Third paragraph.')
+    expect(contentOf(batches[0].operations[0])).toContain('Second paragraph.')
+    expect(contentOf(batches[0].operations[0])).toContain('updated Third paragraph.')
   })
 
   it('emits one block replacement when one transaction changes two nodes in the same span', async () => {
@@ -1097,8 +1094,8 @@ describe('Editor Kit v2', () => {
     expect(batches).toHaveLength(1)
     expect(batches[0].operations).toHaveLength(1)
     expect(batches[0].operations[0]).toMatchObject({ target: { blockId: 'block-b' } })
-    expect(batches[0].operations[0].payload.content).toContain('second: Second paragraph.')
-    expect(batches[0].operations[0].payload.content).toContain('third: Third paragraph.')
+    expect(contentOf(batches[0].operations[0])).toContain('second: Second paragraph.')
+    expect(contentOf(batches[0].operations[0])).toContain('third: Third paragraph.')
   })
 
   it('keeps following block identity when a remote replacement changes its predecessor node count', async () => {
@@ -1145,7 +1142,7 @@ describe('Editor Kit v2', () => {
     expect(mocks.mountRich).not.toHaveBeenCalled()
   })
 
-  it('serializes local edits until the previous block replacement is acknowledged', async () => {
+  it('keeps accepting typing while serializing durable submissions and rebases only after acknowledgement', async () => {
     let sequence = 0
     const mounted = await mountDocumentEditor(document.body, {
       snapshot: snapshot(),
@@ -1154,25 +1151,19 @@ describe('Editor Kit v2', () => {
     const rich = await mocks.mountRich.mock.results[0].value
     const batches: LocalOperationBatch[] = []
     mounted.surface.observeLocalOperations((batch) => batches.push(batch))
-
     rich.view.dispatch(rich.view.state.tr.insertText(' first', 8))
-    rich.view.dispatch(rich.view.state.tr.insertText(' second', 8))
-    await Promise.resolve()
-    expect(batches).toHaveLength(1)
-    expect(rich.getMarkdown()).toContain('Heading first')
-    expect(rich.getMarkdown()).not.toContain('second')
-
-    await mounted.surface.reconcile({
-      kind: 'ack-local', requestId: batches[0].requestId,
-      authoritative: authoritativeSnapshot('revision-2', {
-        'block-a': { blockRevision: 'block-a/2', markdown: batches[0].operations[0].payload.content },
-      }),
-      includedChangeIds: [],
-    })
+    await vi.waitFor(() => expect(batches).toHaveLength(1))
     rich.view.dispatch(rich.view.state.tr.insertText(' second', 14))
     await Promise.resolve()
-    expect(batches).toHaveLength(2)
-    expect(batches[1].operations[0]).toMatchObject({ target: { expectedBlockRevision: 'block-a/2' } })
+    expect(batches).toHaveLength(1)
+    expect(rich.getMarkdown()).toContain('Heading first second')
+    expect(rich.view.editable).toBe(true)
+    const committed = await ackLocal(mounted.surface, batches[0])
+    await vi.waitFor(() => expect(batches).toHaveLength(2))
+    expect(rich.getMarkdown()).toContain('Heading first second')
+    expect(batches[1].operations[0]).toMatchObject({ target: { expectedBlockRevision: committed.blocks[0].blockRevision } })
+    await ackLocal(mounted.surface, batches[1], committed, 'revision-3')
+    await expect(mounted.surface.flush()).resolves.toBeUndefined()
   })
 
   it('emits a reverse local transaction against the acknowledged block revision', async () => {
@@ -1188,7 +1179,7 @@ describe('Editor Kit v2', () => {
     rich.view.dispatch(rich.view.state.tr.insertText(' undo', 8))
     await Promise.resolve()
     const committed = authoritativeSnapshot('revision-2', {
-      'block-a': { blockRevision: 'block-a/2', markdown: batches[0].operations[0].payload.content },
+      'block-a': { blockRevision: 'block-a/2', markdown: contentOf(batches[0].operations[0]) },
     })
     await mounted.surface.reconcile({
       kind: 'ack-local', requestId: batches[0].requestId, authoritative: committed,
@@ -1254,7 +1245,7 @@ describe('Editor Kit v2', () => {
     await mounted.surface.reconcile({
       kind: 'ack-local', requestId: batches[0].requestId,
       authoritative: authoritativeSnapshot('revision-3', {
-        'block-a': { blockRevision: 'block-a/2', markdown: batches[0].operations[0].payload.content },
+        'block-a': { blockRevision: 'block-a/2', markdown: contentOf(batches[0].operations[0]) },
         'block-b': { blockRevision: 'block-b/2', markdown: 'Authoritative remote payload.' },
       }),
       includedChangeIds: ['authoritative-change'],
@@ -1297,7 +1288,7 @@ describe('Editor Kit v2', () => {
     await mounted.surface.reconcile({
       kind: 'ack-local', requestId: batches[0].requestId,
       authoritative: authoritativeSnapshot('revision-4', {
-        'block-a': { blockRevision: 'block-a/2', markdown: batches[0].operations[0].payload.content },
+        'block-a': { blockRevision: 'block-a/2', markdown: contentOf(batches[0].operations[0]) },
         'block-b': { blockRevision: 'block-b/3', markdown: 'Third revision.' },
       }),
       includedChangeIds: ['change-b2', 'change-b3'],
@@ -1338,7 +1329,7 @@ describe('Editor Kit v2', () => {
     expect(rich.getMarkdown()).toContain('Heading local')
 
     const committed = authoritativeSnapshot('revision-3', {
-      'block-a': { blockRevision: 'block-a/3', markdown: batches[0].operations[0].payload.content },
+      'block-a': { blockRevision: 'block-a/3', markdown: contentOf(batches[0].operations[0]) },
     })
     await mounted.surface.reconcile({
       kind: 'ack-local', requestId: batches[0].requestId, authoritative: committed,
@@ -1386,43 +1377,31 @@ describe('Editor Kit v2', () => {
     expect(rich.getMarkdown()).not.toContain('Must not apply')
   })
 
-  it('queues a same-block remote update and consumes it through the stale local rejection', async () => {
-    let sequence = 0
+  it('retains a completed IME draft for comparison when a same-block remote commit arrived during composition', async () => {
     const mounted = await mountDocumentEditor(document.body, {
-      snapshot: snapshot(),
-      ids: { requestId: () => `request-${++sequence}`, operationId: () => `operation-${++sequence}` },
+      snapshot: snapshot(), ids: { requestId: () => 'request-ime', operationId: () => 'operation-ime' },
     })
     const rich = await mocks.mountRich.mock.results[0].value
     const batches: LocalOperationBatch[] = []
+    let state: EditorSurfaceState | undefined
     mounted.surface.observeLocalOperations((batch) => batches.push(batch))
+    mounted.surface.observeState((value) => { state = value })
+    rich.view.dispatch(rich.view.state.tr.setSelection(TextSelection.create(rich.view.state.doc, 2)))
     rich.view.dom.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true }))
     rich.view.dispatch(rich.view.state.tr.insertText('中文', 2))
-    await mounted.surface.reconcile({
-      kind: 'apply-remote',
-      change: {
-        changeId: 'during-ime',
-        baseRevisionId: 'revision-1',
-        revisionId: 'revision-2',
-        blockRevisions: { 'block-a': 'block-a/2' },
-        operations: [replaceOperation('agent-operation', 'block-a', 'block-a/1', '# IME-safe remote heading')],
-      },
-    })
+    await mounted.surface.reconcile({ kind: 'apply-remote', change: {
+      changeId: 'during-ime', baseRevisionId: 'revision-1', revisionId: 'revision-2',
+      blockRevisions: { 'block-a': 'block-a/2' },
+      operations: [replaceOperation('agent-operation', 'block-a', 'block-a/1', '# IME-safe remote heading')],
+    } })
     expect(rich.getMarkdown()).not.toContain('IME-safe')
     expect(rich.getMarkdown()).toContain('中文')
-
     rich.view.dom.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true }))
-    await vi.waitFor(() => expect(batches).toHaveLength(1))
-    expect(rich.getMarkdown()).toContain('中文')
-    expect(rich.getMarkdown()).not.toContain('IME-safe')
-
-    await mounted.surface.reconcile({
-      kind: 'reject-local', requestId: batches[0].requestId,
-      reason: { code: 'stale-base', message: 'The remote revision committed first.' },
-      authoritative: authoritativeSnapshot('revision-2', {
-        'block-a': { blockRevision: 'block-a/2', markdown: '# IME-safe remote heading' },
-      }),
-      includedChangeIds: ['during-ime'],
-    })
+    await vi.waitFor(() => expect(state?.error?.code).toBe('stale-base'))
+    expect(batches).toHaveLength(0)
+    expect(mounted.surface.getDraftMarkdown()).toContain('中文')
+    expect(mounted.surface.retryPending()).toBe(false)
+    mounted.surface.discardDraft()
     expect(rich.getMarkdown()).toContain('IME-safe remote heading')
   })
 
@@ -1449,7 +1428,7 @@ describe('Editor Kit v2', () => {
     expect(batches[0].operations[0]).toMatchObject({
       target: { blockId: 'block-a', expectedBlockRevision: 'block-a/1' },
     })
-    expect(batches[0].operations[0].payload.content).toContain('中文')
+    expect(contentOf(batches[0].operations[0])).toContain('中文')
   })
 
   it('keeps both blocks when a second composition starts before the first finishing frame', async () => {
@@ -1512,7 +1491,7 @@ describe('Editor Kit v2', () => {
     rich.view.dom.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true }))
     rich.view.dispatch(rich.view.state.tr.insertText('文', 3))
     await vi.waitFor(() => expect(batches).toHaveLength(1))
-    expect(batches[0].operations[0].payload.content).toContain('中文')
+    expect(contentOf(batches[0].operations[0])).toContain('中文')
     expect(requestFreshResync).not.toHaveBeenCalled()
 
     await mounted.surface.reconcile({
@@ -1524,6 +1503,9 @@ describe('Editor Kit v2', () => {
       }),
       includedChangeIds: [],
     })
+    expect(mounted.surface.getDraftMarkdown()).toContain('中文')
+    expect(requestFreshResync).not.toHaveBeenCalled()
+    mounted.surface.discardDraft()
     expect(requestFreshResync).toHaveBeenCalledOnce()
   })
 
@@ -1551,5 +1533,112 @@ describe('Editor Kit v2', () => {
 
     expect(batches[0].operations).toHaveLength(1)
     expect(batches[0].operations[0]).toMatchObject({ target: { blockId: 'block-b' } })
+  })
+
+  it('retains typing after a submitted edit becomes a proposal and never treats it as committed text', async () => {
+    let sequence = 0
+    const mounted = await mountDocumentEditor(document.body, {
+      snapshot: snapshot(), ids: { requestId: () => `request-${++sequence}`, operationId: () => `operation-${++sequence}` },
+    })
+    const rich = await mocks.mountRich.mock.results[0].value
+    const batches: LocalOperationBatch[] = []
+    let state: EditorSurfaceState | undefined
+    mounted.surface.observeLocalOperations((batch) => batches.push(batch))
+    mounted.surface.observeState((value) => { state = value })
+    rich.view.dispatch(rich.view.state.tr.insertText(' proposal', 8))
+    await vi.waitFor(() => expect(batches).toHaveLength(1))
+    rich.view.dispatch(rich.view.state.tr.insertText(' later typing', 17))
+    await mounted.surface.reconcile({ kind: 'proposal-stored', requestId: batches[0].requestId,
+      changeSetId: 'stored-proposal', authoritative: snapshot(), includedChangeIds: [] })
+    expect(rich.getMarkdown()).toBe('# Heading\n\nSecond paragraph.\n\nThird paragraph.')
+    expect(mounted.surface.getDraftMarkdown()).toContain('proposal later typing')
+    expect(state?.error?.code).toBe('stale-base')
+    expect(mounted.surface.retryPending()).toBe(false)
+    expect(batches).toHaveLength(1)
+    await expect(mounted.surface.flush()).rejects.toThrow()
+    mounted.surface.discardDraft()
+    expect(state?.error).toBeNull()
+    expect(mounted.surface.getDraftMarkdown()).not.toContain('later typing')
+  })
+
+  it('restores an unsaved failed draft after closing and only submits it after explicit retry', async () => {
+    let sequence = 0
+    const ids = { requestId: () => `request-${++sequence}`, operationId: () => `operation-${++sequence}` }
+    const mounted = await mountDocumentEditor(document.body, { snapshot: snapshot(), ids })
+    const rich = await mocks.mountRich.mock.results[0].value
+    const batches: LocalOperationBatch[] = []
+    mounted.surface.observeLocalOperations((batch) => batches.push(batch))
+    rich.view.dispatch(rich.view.state.tr.insertText(' recovered', 8))
+    await vi.waitFor(() => expect(batches).toHaveLength(1))
+    await mounted.surface.reconcile({ kind: 'reject-local', requestId: batches[0].requestId,
+      reason: { code: 'persistence-failed', message: 'disk unavailable' }, authoritative: snapshot(), includedChangeIds: [] })
+    await mounted.surface.destroy()
+    const reopened = await mountDocumentEditor(document.body, { snapshot: snapshot(), ids })
+    const reopenedBatches: LocalOperationBatch[] = []
+    let state: EditorSurfaceState | undefined
+    reopened.surface.observeState((value) => { state = value })
+    reopened.surface.observeLocalOperations((batch) => reopenedBatches.push(batch))
+    await Promise.resolve()
+    expect(reopened.surface.getDraftMarkdown()).toContain('Heading recovered')
+    expect(state?.error?.code).toBe('persistence-failed')
+    expect(reopenedBatches).toHaveLength(0)
+    expect(reopened.surface.retryPending()).toBe(true)
+    await vi.waitFor(() => expect(reopenedBatches).toHaveLength(1))
+    await ackLocal(reopened.surface, reopenedBatches[0])
+    await reopened.surface.flush()
+    expect(localStorage.getItem('notemd-cdr-draft:document-1')).toBeNull()
+    await reopened.surface.destroy()
+  })
+
+  it('does not convert a retained stale draft into a retryable overwrite when reopened on the new committed head', async () => {
+    let sequence = 0
+    const ids = { requestId: () => `request-${++sequence}`, operationId: () => `operation-${++sequence}` }
+    const mounted = await mountDocumentEditor(document.body, { snapshot: snapshot(), ids })
+    const rich = await mocks.mountRich.mock.results[0].value
+    const batches: LocalOperationBatch[] = []
+    mounted.surface.observeLocalOperations((batch) => batches.push(batch))
+    rich.view.dispatch(rich.view.state.tr.insertText(' local draft', 8))
+    await vi.waitFor(() => expect(batches).toHaveLength(1))
+    const remoteHead = authoritativeSnapshot('revision-remote', {
+      'block-a': { markdown: '# Remote wins', blockRevision: 'block-a/remote' },
+    })
+    await mounted.surface.reconcile({ kind: 'reject-local', requestId: batches[0].requestId,
+      reason: { code: 'stale-base', message: 'same block changed remotely' }, authoritative: remoteHead, includedChangeIds: [] })
+    await mounted.surface.destroy()
+    const reopened = await mountDocumentEditor(document.body, { snapshot: remoteHead, ids })
+    let state: EditorSurfaceState | undefined
+    reopened.surface.observeState((value) => { state = value })
+    expect(state?.error?.code).toBe('stale-base')
+    expect(reopened.surface.getDraftMarkdown()).toContain('local draft')
+    expect(reopened.surface.retryPending()).toBe(false)
+    const reopenedRich = await mocks.mountRich.mock.results[1].value
+    expect(reopenedRich.getMarkdown()).toContain('Remote wins')
+    reopened.surface.discardDraft()
+    await reopened.surface.destroy()
+  })
+
+  it('defers an acknowledgement received during a later composition until its final input is available', async () => {
+    let sequence = 0
+    const mounted = await mountDocumentEditor(document.body, {
+      snapshot: snapshot(), ids: { requestId: () => `request-${++sequence}`, operationId: () => `operation-${++sequence}` },
+    })
+    const rich = await mocks.mountRich.mock.results[0].value
+    const batches: LocalOperationBatch[] = []
+    mounted.surface.observeLocalOperations((batch) => batches.push(batch))
+    rich.view.dispatch(rich.view.state.tr.insertText(' first', 8))
+    await vi.waitFor(() => expect(batches).toHaveLength(1))
+    rich.view.dispatch(rich.view.state.tr.setSelection(TextSelection.create(rich.view.state.doc, 14)))
+    rich.view.dom.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true }))
+    rich.view.dispatch(rich.view.state.tr.insertText('中', 14))
+    const committed = await ackLocal(mounted.surface, batches[0])
+    expect(rich.getMarkdown()).toContain('first中')
+    expect(batches).toHaveLength(1)
+    rich.view.dom.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true }))
+    rich.view.dispatch(rich.view.state.tr.insertText('文', 15))
+    await vi.waitFor(() => expect(batches).toHaveLength(2))
+    expect(rich.getMarkdown()).toContain('first中文')
+    expect(batches[1].operations[0]).toMatchObject({ target: { expectedBlockRevision: committed.blocks[0].blockRevision } })
+    await ackLocal(mounted.surface, batches[1], committed, 'revision-3')
+    await expect(mounted.surface.flush()).resolves.toBeUndefined()
   })
 })

@@ -1,12 +1,14 @@
 # 人与多 Agent 通用共写文档运行时设计
 
-> 阶段：设计收敛，Stage 1A、Stage 1B-1 与本机共写预览的真实 Agent 入口已实现；`block.move`、Projection、用途迁移闭环与 MEMORY MVP 尚未完成。
+> 阶段：Stage 1A、Stage 1B 的本机编辑能力与共写预览的真实 Agent 入口已实现；Projection、用途迁移闭环与 MEMORY MVP 尚未完成。2026-09-05 的编辑重构尚未发布。
 >
 > 决策：采用“通用内核、MEMORY-first 验证”。从第一天使用领域无关的数据结构和窄接口，但第一阶段只交付 MEMORY 的完整纵向闭环。第二个真实场景验证前，不把内部扩展点发布为稳定 SDK，也不建设通用 IAM、事件平台或任意协作后端。
 >
-> 复核日期：2026-09-04。
+> 复核日期：2026-09-05。
 >
 > 文档关系：本稿是该方向的唯一实施基线，取代 `2026-09-04-co-authored-surface-design.md` 中与正文权威、治理归属、API 和 Yjs 时机有关的设计结论；旧稿中的仓库现状证据已在本稿重新核对。若旧稿继续保留，必须明确标记为 superseded，不能并列作为规范。
+
+> 最新编辑状态：本稿的 [CDR 编辑可用性补充契约](2026-09-05-cdr-editor-usability.md) 是 Stage 1B 的细化，取代下文历史切片中的“结构操作独立成批”“跨块键盘 fail closed”“move／结构 undo 未开放”和 session v5 限制。当前实现使用有序原子批次、精确来源／目标锚点的 move、显式历史身份恢复、schema v6、持续可编辑的保存队列及单一受控撤销栈；Memory 提供完整基础编辑入口和失败稿恢复。下文 Stage 0–1B-1 的记录保留为演进证据，不作为当前编辑能力的限制；完整 MEMORY MVP 闸门不变。
 
 > 历史实施记录（Stage 0）：首个可运行切片使用并存的 Editor Kit v2、领域无关的 Operation 会话，以及 `notemd.memory` 窗口内的 fixture 验证单块 `block.replace`、串行本地确认、局部远程事务、ack 回声隔离、stale-base、幂等、Decoration 与 IME 排队。当时本地插入、删除、移动、拆合及多块编辑均 fail closed；其中 insert／delete 已由下文 Stage 1B-1 取代，move／拆合仍未开放。块布局已扩展为“一个稳定块覆盖一组连续顶层节点”，远端替换可改变该范围的节点数并原子更新后续映射。现有 BlockYaml 的 chunk／fingerprint／merge 生产函数已加入 CDR conformance 测试：长中文小改和精确重排可保留 ID，但小于 20 个归一化字符的短块改写会 fresh＋retired，默认 `minChars=400` 也会合并相邻短章节。因此，“外部 Markdown 依赖当前 fingerprint／merge 重建已改写短块的身份”目前是明确 No-Go；携带显式 block ID 的 CDR 编辑与 Operation 寻址不受此结论影响。
 >
@@ -898,9 +900,10 @@ Go/No-Go：任一普通局部更新需要全文 `setContent()`、块 ID 往返�
 - replace 已迁移到 `target + payload`，持久 session schema 升至 v5，并可严格迁移 v2/v3/v4 的 receipt、proposal 与 assessment；v5 增加有界 rationale。
 - 平面 `block.insert`／`block.delete`、生命周期内 candidate ID 防复用、Editor Kit 显式结构命令以及同代 Markdown/aggregate 持久化已实现；键盘结构推断继续 fail closed。
 
-**Stage 1B-2：move 与需要时的身份关系**
+**Stage 1B-2：move 与本机编辑可用性（已实现，尚未发布）**
 
-- 在 insert/delete 并发与恢复不变量通过后加入 `block.move`；移动必须携精确来源与目标 order anchor。
+- `block.move` 携精确来源与目标 order anchor；有序原子 batch 支持跨块编辑，撤销恢复退役身份须绑定精确历史引用，session v6 严格迁移 v2–v5。
+- 连续输入、跨块剪贴板、格式／表格插入、保存期间继续输入、失败草稿、历史正文恢复及真实 Memory UI 已按补充契约验证；生产构建与原生 WebView 验收分别记录，不混称为发布完成。
 - 只有 split/merge、外部导入或跨文档复用出现真实消费者时再增加 lineage／完整 BlockIdentityStore，不为尚未发生的身份推断提前建模。
 
 **Stage 1C：MEMORY projection**

@@ -1,11 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import { createSchema, parseMarkdown } from '@moraya/core'
+import { createSchema } from '@moraya/core'
 import { EditorState } from 'prosemirror-state'
 import {
   deleteBlockSpan,
   insertBlockSpan,
   materializeBlocks,
-  planLocalBlockEdit,
   replaceBlockSpans,
   serializeSpan,
   spanContaining,
@@ -20,6 +19,34 @@ const mediaResolver = {
 const schema = createSchema({ mediaResolver })
 
 describe('Editor Kit v2 block layout', () => {
+  it('round-trips exact trailing hard breaks through Markdown and does not replace them on acknowledgment', () => {
+    for (const markdown of ['hello  \n', 'hello  \n  \n', '> hello  \n>   \n', '- hello  \n    \n', '# hello  \n  \n', '  \n']) {
+      const initial = materializeBlocks([{ blockId: 'a', markdown }], schema)
+      expect(serializeSpan(initial.doc, initial.layout.spans[0])).toBe(markdown)
+      const reopened = materializeBlocks([{ blockId: 'a', markdown: serializeSpan(initial.doc, initial.layout.spans[0]) }], schema)
+      expect(reopened.doc.eq(initial.doc)).toBe(true)
+      const acknowledged = replaceBlockSpans(EditorState.create({ schema, doc: initial.doc }).tr, initial.layout, [{ blockId: 'a', markdown }])
+      expect(acknowledged.transaction.docChanged).toBe(false)
+    }
+  })
+
+  it('keeps trailing normal newlines as formatting and never interprets code/table whitespace as hard breaks', () => {
+    for (const markdown of ['hello\n', 'hello\n\n', '```\nhello  \n', '    hello  \n', '| A | B |\n| --- | --- |\n| c | d |  \n']) {
+      const initial = materializeBlocks([{ blockId: 'a', markdown }], schema)
+      let hardbreaks = 0
+      initial.doc.descendants((node) => { if (node.type === schema.nodes.hardbreak) hardbreaks++ })
+      expect(hardbreaks, markdown).toBe(0)
+      expect(initial.doc.childCount).toBe(1)
+    }
+  })
+
+  it('preserves consecutive empty blocks as separate materialized paragraphs', () => {
+    const initial = materializeBlocks([{ blockId: 'a', markdown: '' }, { blockId: 'b', markdown: '' }], schema)
+    expect(initial.layout.spans).toHaveLength(2)
+    expect(initial.doc.childCount).toBe(2)
+    expect(initial.layout.spans.map((span) => serializeSpan(initial.doc, span))).toEqual(['', ''])
+  })
+
   it('maps one stable block across its contiguous heading, paragraph, and list nodes', () => {
     const materialized = materializeBlocks([
       { blockId: 'section-a', markdown: '## Context\n\nNarrative.\n\n- first\n- second' },
@@ -94,83 +121,27 @@ describe('Editor Kit v2 block layout', () => {
     expect(deleted.layout).toEqual(initial.layout)
   })
 
-  it('keeps Enter and multi-paragraph paste inside one stable block span', () => {
-    const initial = materializeBlocks([
-      { blockId: 'section-a', markdown: 'Alpha.' },
-      { blockId: 'section-b', markdown: 'Bravo.' },
-    ], schema)
-    const split = parseMarkdown('Alpha\n\ncontinued\n\nBravo.', schema)
-    const plan = planLocalBlockEdit(initial.doc, split, initial.layout, 'section-a')
-
-    expect(plan).toEqual({
-      blockId: 'section-a',
-      layout: {
-        spans: [
-          { blockId: 'section-a', startIndex: 0, endIndex: 2 },
-          { blockId: 'section-b', startIndex: 2, endIndex: 3 },
-        ],
-      },
-    })
-    expect(serializeSpan(split, plan!.layout.spans[0])).toBe('Alpha\n\ncontinued')
-  })
-
-  it('keeps a paragraph join inside one block and shifts following spans back', () => {
-    const initial = materializeBlocks([
-      { blockId: 'section-a', markdown: 'Alpha.\n\ncontinued' },
-      { blockId: 'section-b', markdown: 'Bravo.' },
-    ], schema)
-    const joined = parseMarkdown('Alpha continued\n\nBravo.', schema)
-    const plan = planLocalBlockEdit(initial.doc, joined, initial.layout, 'section-a')
-
-    expect(plan?.blockId).toBe('section-a')
-    expect(plan?.layout.spans).toEqual([
-      { blockId: 'section-a', startIndex: 0, endIndex: 1 },
-      { blockId: 'section-b', startIndex: 1, endIndex: 2 },
-    ])
-  })
-
   it('does not rematerialize an acknowledged block when its Markdown already matches', () => {
     const initial = materializeBlocks([
       { blockId: 'section-a', markdown: 'Second paragraph.' },
       { blockId: 'section-b', markdown: 'Following section.' },
     ], schema)
     const splitTransaction = EditorState.create({ schema, doc: initial.doc }).tr.split(7)
-    const plan = planLocalBlockEdit(initial.doc, splitTransaction.doc, initial.layout, 'section-a')!
-    const markdown = serializeSpan(splitTransaction.doc, plan.layout.spans[0])
+    const layout = { spans: [
+      { blockId: 'section-a', startIndex: 0, endIndex: 2 },
+      { blockId: 'section-b', startIndex: 2, endIndex: 3 },
+    ] }
+    const markdown = serializeSpan(splitTransaction.doc, layout.spans[0])
     const splitState = EditorState.create({ schema, doc: splitTransaction.doc })
 
-    const acknowledged = replaceBlockSpans(splitState.tr, plan.layout, [
+    const acknowledged = replaceBlockSpans(splitState.tr, layout, [
       { blockId: 'section-a', markdown },
       { blockId: 'section-b', markdown: 'Following section.' },
     ])
 
     expect(acknowledged.transaction.docChanged).toBe(false)
     expect(acknowledged.transaction.doc.eq(splitTransaction.doc)).toBe(true)
-    expect(acknowledged.layout).toEqual(plan.layout)
-  })
-
-  it('uses the selected block to disambiguate insertion at a governed boundary', () => {
-    const initial = materializeBlocks([
-      { blockId: 'section-a', markdown: 'Alpha.' },
-      { blockId: 'section-b', markdown: 'Bravo.' },
-    ], schema)
-    const inserted = parseMarkdown('Alpha.\n\nNew paragraph.\n\nBravo.', schema)
-
-    expect(planLocalBlockEdit(initial.doc, inserted, initial.layout, null)).toBeNull()
-    expect(planLocalBlockEdit(initial.doc, inserted, initial.layout, 'section-a')?.blockId).toBe('section-a')
-    expect(planLocalBlockEdit(initial.doc, inserted, initial.layout, 'section-b')?.blockId).toBe('section-b')
-  })
-
-  it('rejects transactions that join or reorder different governed blocks', () => {
-    const initial = materializeBlocks([
-      { blockId: 'section-a', markdown: 'Alpha.' },
-      { blockId: 'section-b', markdown: 'Bravo.' },
-    ], schema)
-    const joined = parseMarkdown('Alpha Bravo.', schema)
-    const reordered = parseMarkdown('Bravo.\n\nAlpha.', schema)
-
-    expect(planLocalBlockEdit(initial.doc, joined, initial.layout, 'section-a')).toBeNull()
-    expect(planLocalBlockEdit(initial.doc, reordered, initial.layout, 'section-a')).toBeNull()
+    expect(acknowledged.layout).toEqual(layout)
   })
 
   it('rejects duplicate and unknown replacements before changing the transaction', () => {

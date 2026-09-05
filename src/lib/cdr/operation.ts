@@ -11,7 +11,7 @@ export interface ExistingBlockTarget {
   readonly expectedBlockRevision: string
 }
 
-/** A gap is valid only while its two neighbours remain adjacent. */
+/** A gap is valid only while its neighbours remain adjacent; null/null denotes an empty working list. */
 export interface BlockGapTarget {
   readonly leftBlockId: string | null
   readonly rightBlockId: string | null
@@ -31,6 +31,17 @@ export interface InsertBlockOperation {
   readonly payload: {
     readonly candidateBlockId: string
     readonly content: string
+    readonly restoreFrom?: { readonly revisionId: string; readonly blockId: string }
+  }
+}
+
+export interface MoveBlockOperation {
+  readonly kind: 'block.move'
+  readonly operationId: string
+  readonly target: ExistingBlockTarget
+  readonly payload: {
+    readonly source: BlockGapTarget
+    readonly destination: BlockGapTarget
   }
 }
 
@@ -41,12 +52,13 @@ export interface DeleteBlockOperation {
   readonly payload: Readonly<Record<string, never>>
 }
 
-export type Operation = ReplaceBlockOperation | InsertBlockOperation | DeleteBlockOperation
+export type Operation = ReplaceBlockOperation | InsertBlockOperation | DeleteBlockOperation | MoveBlockOperation
 
 export interface OperationBatch {
   readonly requestId: string
   readonly documentId: string
   readonly baseRevisionId: string
+  /** Ordered and atomic. Gaps address preceding results; existing versions address the submitted base. */
   readonly operations: readonly Operation[]
 }
 
@@ -55,7 +67,7 @@ export interface AppliedChange {
   readonly originRequestId?: string
   readonly baseRevisionId: string
   readonly revisionId: string
-  /** Resulting revisions for replace/insert outputs; delete has no entry. */
+  /** One final revision per replace/insert output ID; delete and move have no entry. */
   readonly blockRevisions: Readonly<Record<string, string>>
   readonly operations: readonly Operation[]
 }
@@ -90,8 +102,9 @@ function exactKeys(
   path: string,
   required: readonly string[],
   fail: OperationProtocolFailure,
+  optional: readonly string[] = [],
 ): void {
-  const allowed = new Set(required)
+  const allowed = new Set([...required, ...optional])
   for (const key of required) {
     if (!Object.prototype.hasOwnProperty.call(value, key)) fail(`${path}.${key}`, 'is required')
   }
@@ -145,9 +158,6 @@ function parseGapTarget(value: unknown, path: string, fail: OperationProtocolFai
     leftBlockId: nullableString(item.leftBlockId, `${path}.leftBlockId`, fail),
     rightBlockId: nullableString(item.rightBlockId, `${path}.rightBlockId`, fail),
   }
-  if (target.leftBlockId === null && target.rightBlockId === null) {
-    fail(path, 'must identify at least one neighbouring block')
-  }
   if (target.leftBlockId !== null && target.leftBlockId === target.rightBlockId) {
     fail(path, 'must identify two different neighbouring blocks')
   }
@@ -172,8 +182,17 @@ export function parseOperation(
         target: parseExistingTarget(item.target, `${path}.target`, fail),
         payload: { content: stringValue(payload.content, `${path}.payload.content`, fail, true) },
       }
-    case 'block.insert':
-      exactKeys(payload, `${path}.payload`, ['candidateBlockId', 'content'], fail)
+    case 'block.insert': {
+      exactKeys(payload, `${path}.payload`, ['candidateBlockId', 'content'], fail, ['restoreFrom'])
+      let restoreFrom: InsertBlockOperation['payload']['restoreFrom']
+      if (payload.restoreFrom !== undefined) {
+        const source = record(payload.restoreFrom, `${path}.payload.restoreFrom`, fail)
+        exactKeys(source, `${path}.payload.restoreFrom`, ['revisionId', 'blockId'], fail)
+        restoreFrom = {
+          revisionId: stringValue(source.revisionId, `${path}.payload.restoreFrom.revisionId`, fail),
+          blockId: stringValue(source.blockId, `${path}.payload.restoreFrom.blockId`, fail),
+        }
+      }
       return {
         kind: 'block.insert',
         operationId,
@@ -181,6 +200,19 @@ export function parseOperation(
         payload: {
           candidateBlockId: stringValue(payload.candidateBlockId, `${path}.payload.candidateBlockId`, fail),
           content: stringValue(payload.content, `${path}.payload.content`, fail, true),
+          ...(restoreFrom ? { restoreFrom } : {}),
+        },
+      }
+    }
+    case 'block.move':
+      exactKeys(payload, `${path}.payload`, ['source', 'destination'], fail)
+      return {
+        kind: 'block.move',
+        operationId,
+        target: parseExistingTarget(item.target, `${path}.target`, fail),
+        payload: {
+          source: parseGapTarget(payload.source, `${path}.payload.source`, fail),
+          destination: parseGapTarget(payload.destination, `${path}.payload.destination`, fail),
         },
       }
     case 'block.delete':
@@ -192,7 +224,7 @@ export function parseOperation(
         payload: {},
       }
     default:
-      return fail(`${path}.kind`, 'must be block.replace, block.insert, or block.delete')
+      return fail(`${path}.kind`, 'must be block.replace, block.insert, block.move, or block.delete')
   }
 }
 
@@ -203,16 +235,13 @@ export function operationContentWrites(operation: Operation): readonly ContentWr
     case 'block.insert':
       return [{ blockId: operation.payload.candidateBlockId, content: operation.payload.content }]
     case 'block.delete':
+    case 'block.move':
       return []
   }
 }
 
 export function operationExistingTargetId(operation: Operation): string | null {
   return operation.kind === 'block.insert' ? null : operation.target.blockId
-}
-
-export function hasMixedStructuralOperations(operations: readonly Operation[]): boolean {
-  return operations.length > 1 && operations.some((operation) => operation.kind !== 'block.replace')
 }
 
 export function parseOperationBatch(
@@ -227,21 +256,18 @@ export function parseOperationBatch(
     .map((operation, index) => parseOperation(operation, `${path}.operations[${index}]`, fail))
   unique(operations.map((operation) => operation.operationId), `${path}.operations operationIds`, fail)
   unique(
-    operations.flatMap((operation) => operationContentWrites(operation).map((write) => write.blockId)),
-    `${path}.operations output blockIds`,
-    fail,
-  )
-  unique(
     operations.flatMap((operation) => {
+      if (operation.kind === 'block.move') return []
       const target = operationExistingTargetId(operation)
       return target === null ? [] : [target]
     }),
     `${path}.operations existing target blockIds`,
     fail,
   )
-  if (hasMixedStructuralOperations(operations)) {
-    fail(`${path}.operations`, 'must isolate structural operations')
-  }
+  unique(operations.filter((operation) => operation.kind === 'block.insert')
+    .map((operation) => operation.payload.candidateBlockId), `${path}.operations inserted blockIds`, fail)
+  unique(operations.filter((operation) => operation.kind === 'block.move')
+    .map((operation) => operation.target.blockId), `${path}.operations moved blockIds`, fail)
   return {
     requestId: stringValue(item.requestId, `${path}.requestId`, fail),
     documentId: stringValue(item.documentId, `${path}.documentId`, fail),

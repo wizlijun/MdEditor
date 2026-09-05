@@ -19,7 +19,7 @@ describe('CDR operation protocol', () => {
     expect(canonicalOperationBatch(batch)).toBe(JSON.stringify(batch))
   })
 
-  it('strictly parses isolated insert and delete operations', () => {
+  it('strictly parses ordered insert and delete operations', () => {
     const inserted = {
       ...batch,
       operations: [{
@@ -40,8 +40,8 @@ describe('CDR operation protocol', () => {
     }
     expect(parseOperationBatch(inserted)).toEqual(inserted)
     expect(parseOperationBatch(deleted)).toEqual(deleted)
-    expect(() => parseOperationBatch({ ...batch, operations: [...inserted.operations, ...deleted.operations] }))
-      .toThrow('must isolate structural operations')
+    expect(parseOperationBatch({ ...batch, operations: [...inserted.operations, ...deleted.operations] }).operations)
+      .toHaveLength(2)
   })
 
   it('rejects old flat fields, unknown fields, invalid gaps, and duplicate targets', () => {
@@ -56,15 +56,44 @@ describe('CDR operation protocol', () => {
       operations: [{
         kind: 'block.insert',
         operationId: 'insert-1',
-        target: { leftBlockId: null, rightBlockId: null },
+        target: { leftBlockId: 'same', rightBlockId: 'same' },
         payload: { candidateBlockId: 'block-2', content: 'Second block.' },
       }],
-    })).toThrow('must identify at least one neighbouring block')
+    })).toThrow('must identify two different neighbouring blocks')
     expect(() => parseOperationBatch({
       requestId: 'legacy',
       documentId: 'document-1',
       baseRevisionId: 'revision-1',
       operations: [{ ...batch.operations[0], blockId: 'legacy-flat' }],
     })).toThrow('blockId is not allowed')
+  })
+
+  it('keeps old signatures stable and detaches nested move/restore data', () => {
+    const move = {
+      kind: 'block.move' as const,
+      operationId: 'move',
+      target: { blockId: 'block-1', expectedBlockRevision: 'block-revision-1' },
+      payload: {
+        source: { leftBlockId: null as string | null, rightBlockId: 'block-2' },
+        destination: { leftBlockId: 'block-2', rightBlockId: null },
+      },
+    }
+    const moved = {
+      ...batch,
+      operations: [move, batch.operations[0]],
+    }
+    const normalized = parseOperationBatch(moved)
+    move.payload.source.leftBlockId = 'changed'
+    expect(normalized.operations[0]).toMatchObject({ payload: { source: { leftBlockId: null } } })
+    expect(() => parseOperationBatch({ ...moved, operations: [move, {
+      ...move, operationId: 'move-twice',
+    }] })).toThrow('contains duplicate block-1')
+    expect(canonicalOperationBatch(batch)).toBe(JSON.stringify(batch))
+    const restored = parseOperationBatch({ ...batch, operations: [{
+      kind: 'block.insert', operationId: 'restore',
+      target: { leftBlockId: null, rightBlockId: null },
+      payload: { candidateBlockId: 'block-1', content: '', restoreFrom: { revisionId: 'history', blockId: 'block-1' } },
+    }, batch.operations[0]] })
+    expect(restored.operations).toHaveLength(2)
   })
 })

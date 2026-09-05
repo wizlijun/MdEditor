@@ -149,6 +149,36 @@ class FakeManagedHost {
 }
 
 describe('managed-document', () => {
+  it('persists whole-document clear and explicit identity restoration in one generation each', async () => {
+    const host = new FakeManagedHost()
+    const initial = await fixture()
+    const makeStore = () => new ManagedDocumentStore(vaultPath, documentId, canonicalMemoryFrontmatter(documentId), host.request)
+    const session = await PersistentDocumentSession.open(initial, uuidIds(), makeStore())
+    await session.submit({
+      requestId: 'clear', documentId, baseRevisionId: initial.revisionId,
+      operations: [{ kind: 'block.replace', operationId: 'clear-first',
+        target: { blockId: initial.blocks[0].blockId, expectedBlockRevision: initial.blocks[0].blockRevision },
+        payload: { content: '' },
+      }, ...remove(initial, initial.blocks[1].blockId).operations],
+    }, 'human')
+    expect(host.generation).toBe(2)
+    expect(host.markdown).toBe(`${canonicalMemoryFrontmatter(documentId)}\n`)
+    const reopened = await PersistentDocumentSession.open(initial, uuidIds(), makeStore())
+    expect(reopened.snapshot().blocks[0].markdown).toBe('')
+    await reopened.submit({
+      requestId: 'restore', documentId, baseRevisionId: reopened.snapshot().revisionId,
+      operations: [{ kind: 'block.insert', operationId: 'restore-second',
+        target: { leftBlockId: initial.blocks[0].blockId, rightBlockId: null },
+        payload: { candidateBlockId: initial.blocks[1].blockId, content: initial.blocks[1].markdown,
+          restoreFrom: { revisionId: initial.revisionId, blockId: initial.blocks[1].blockId } },
+      }],
+    }, 'human')
+    expect(host.generation).toBe(3)
+    const restored = await PersistentDocumentSession.open(initial, uuidIds(), makeStore())
+    expect(restored.snapshot().blocks[1]).toEqual(initial.blocks[1])
+    expect((host.aggregate as any).derivedBlockIndex.active).toHaveLength(2)
+  })
+
   it('derives the one fixed Memory-first path and inspects without creating it', async () => {
     expect(managedMemoryPath('wiki')).toBe('wiki/Memory Workspace.note.md')
     expect(() => managedMemoryPath('../wiki')).toThrow('invalid wiki_dir')
