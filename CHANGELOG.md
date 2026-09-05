@@ -7,6 +7,8 @@ For the full commit history, see the git log.
 
 ## Unreleased
 
+## v6.906.1 — 2026-09-06
+
 ### Changed
 
 - **All 16 production plugins receive a coordinated release.** OpenClaw joins the marketplace for the first time; the developer fixture is excluded. Update note.md first, then update plugins and restart. Memory 2.5.2 requires note.md 6.906.1 or newer for the completed document editor; back up collaborative documents before upgrading, and restore matching data and software together if rolling back.
