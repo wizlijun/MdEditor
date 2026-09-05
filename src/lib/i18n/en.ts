@@ -728,6 +728,7 @@ export const en = {
   'smartSearch.agentFailed': 'The AI service is temporarily unavailable. Try again or choose another service in settings.',
   'smartSearch.agentTimeout': 'This is taking longer than expected. Try again or adjust the time limit in settings.',
   'smartSearch.agentIncomplete': 'Your question could not be understood. Try asking it another way.',
+  'smartSearch.moreActions': 'More actions',
 
   // Search & index settings tab
   'search.index.noVault': 'Open a vault to see its search index status.',

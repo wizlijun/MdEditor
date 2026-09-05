@@ -109,7 +109,10 @@
   let activityExpanded = $state<boolean | null>(null)
   let copyFeedback = $state('')
   let copyTimer: ReturnType<typeof setTimeout> | undefined
-  let handoffMenuOpen = $state(false)
+  let actionsMenuOpen = $state(false)
+  let actionsMenuEl = $state<HTMLDivElement>()
+  let actionsButton = $state<HTMLButtonElement>()
+  let actionsMenuTop = $state(0)
   let handoffRun = $state<{ provider: string; runId: string } | null>(null)
   let handoffError = $state('')
   let handoffBusy = $state(false)
@@ -165,7 +168,6 @@
     ? dateGroups().map((group) => ({ key: group.key, label: group.key, hits: group.hits }))
     : groups.map((group) => ({ key: groupKey(group), label: groupLabel(group), hits: group.files.flatMap((file) => file.hits) })))
   let canLookup = $derived(inputValue.trim().length > 0 && !lookupBusy && !summaryBusy && !handoffBusy)
-  let needsDeepAgent = $derived(/(?:所有|全部|完整|从未|不存在|有没有遗漏|精确数量|比较|分析原因|总结整)/u.test(inputValue))
   let hasSummaryCandidates = $derived(authoritativeResults && (
     selectedKeys.length ? store.hits.filter((hit) => selectedSet.has(hitKey(hit))) : visibleHits
   ).some((hit) => (
@@ -373,6 +375,7 @@
   }
 
   function scheduleSearch(): void {
+    closeActionsMenu(false)
     cancelTimer()
     supersedeActive()
     resetResultEdits()
@@ -441,9 +444,9 @@
   }
 
   async function hideWindow(): Promise<void> {
-    if (settingsOpen || handoffMenuOpen) {
+    if (settingsOpen || actionsMenuOpen) {
       closeSettings()
-      handoffMenuOpen = false
+      closeActionsMenu()
       return
     }
     cancelTimer()
@@ -474,7 +477,7 @@
   }
 
   async function openSettings(): Promise<void> {
-    handoffMenuOpen = false
+    closeActionsMenu(false)
     settingsOpen = true
     await tick()
     settingsEl?.focus()
@@ -486,8 +489,48 @@
     settingsButton?.focus()
   }
 
+  async function toggleActionsMenu(): Promise<void> {
+    if (actionsMenuOpen) { closeActionsMenu(); return }
+    positionActionsMenu()
+    actionsMenuOpen = true
+    await tick()
+    actionsMenuEl?.querySelector<HTMLButtonElement>('button:not(:disabled)')?.focus()
+  }
+
+  function positionActionsMenu(): void {
+    if (actionsButton) actionsMenuTop = Math.min(actionsButton.getBoundingClientRect().bottom + 4, window.innerHeight - 100)
+  }
+
+  function closeActionsMenu(restoreFocus = true): void {
+    if (!actionsMenuOpen) return
+    actionsMenuOpen = false
+    if (restoreFocus) actionsButton?.focus()
+  }
+
+  function menuAction(action: () => unknown): void {
+    closeActionsMenu()
+    void action()
+  }
+
   function onWindowKeydown(event: KeyboardEvent): void {
     if (isImeKey(event)) return
+    if (actionsMenuOpen) {
+      if (event.key === 'Escape') {
+        event.preventDefault()
+        closeActionsMenu()
+        return
+      }
+      if (event.key === 'Tab') closeActionsMenu()
+      if (['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) {
+        event.preventDefault()
+        const items = Array.from(actionsMenuEl?.querySelectorAll<HTMLButtonElement>('button:not(:disabled)') ?? [])
+        const index = items.indexOf(document.activeElement as HTMLButtonElement)
+        const next = event.key === 'Home' ? 0 : event.key === 'End' ? items.length - 1
+          : (index + (event.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length
+        items[next]?.focus()
+        return
+      }
+    }
     if (settingsOpen && event.key === 'Tab' && settingsEl) {
       const controls = Array.from(settingsEl.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled), select:not(:disabled), summary'))
         .filter((el) => !el.closest('details:not([open])') || el.tagName === 'SUMMARY')
@@ -502,7 +545,7 @@
     }
     if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'f') {
       event.preventDefault()
-      if (!settingsOpen) { inputEl?.focus(); inputEl?.select() }
+      if (!settingsOpen) { closeActionsMenu(false); inputEl?.focus(); inputEl?.select() }
       return
     }
     if (event.key === 'Escape' && event.target !== inputEl) {
@@ -963,7 +1006,7 @@
   }
 
   async function handoff(providerId?: string): Promise<void> {
-    handoffMenuOpen = false
+    closeActionsMenu()
     const packet = buildHandoffPacket(inputValue, resolvedPlan, handoffHits())
     const prompt = buildHandoffPrompt(packet)
     const configured = providerId
@@ -1299,7 +1342,7 @@
   }
 </script>
 
-<svelte:window onkeydown={onWindowKeydown} />
+<svelte:window onkeydown={onWindowKeydown} onresize={() => { if (actionsMenuOpen) positionActionsMenu() }} />
 
 {#snippet magnifier(size = 22)}
   <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><circle cx="10.8" cy="10.8" r="7.3"/><path d="m16.2 16.2 4.6 4.6"/></svg>
@@ -1332,10 +1375,7 @@
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><path d="M4 7h5m4 0h7M4 17h9m4 0h3"/><circle cx="11" cy="7" r="2"/><circle cx="15" cy="17" r="2"/></svg>
       </button>
     </section>
-    <div class="input-hint">
-      <span>{t('smartSearch.searchShortcut')}</span>
-      <span>{plannerAgent ? plannerAgent.harness?.harness || plannerAgent.name : t('smartSearch.localMode')}</span>
-    </div>
+    {#if !authoritativeResults}<div class="input-hint">{t('smartSearch.searchShortcut')}</div>{/if}
   </div>
 
   {#if resolvedPlan}
@@ -1410,7 +1450,7 @@
         {#if store.truncated}<div class="partial-note">{t('smartSearch.partialResults', { n: store.hits.length })}<button disabled={working} onclick={() => void runDeep()}>{t('smartSearch.expandSearch')}</button></div>{/if}
         {#if selectedKeys.length || removedKeys.length}
           <div class="selection-bar">
-            {#if selectedKeys.length}<span>{t('smartSearch.selectedCount', { n: selectedKeys.length })}</span><button onclick={() => { selectedKeys = []; invalidateSummary() }}>{t('smartSearch.clearSelection')}</button><button onclick={() => removeKeys(selectedKeys)}>{t('smartSearch.removeSelected')}</button>{:else}<span>{t('smartSearch.removedCount', { n: removedKeys.length })}</span>{/if}
+            {#if selectedKeys.length}<span>{t('smartSearch.selectedCount', { n: selectedKeys.length })}</span>{:else}<span>{t('smartSearch.removedCount', { n: removedKeys.length })}</span>{/if}
             {#if lastRemoved.length}<button onclick={undoRemove}>{t('smartSearch.undo')}</button>{/if}
           </div>
         {/if}
@@ -1454,11 +1494,42 @@
             {/each}
           {/if}
         </div>
-        <footer class="results-footer">{t('smartSearch.openHint')}</footer>
       </aside>
 
       <article class="preview-pane" aria-label={t('smartSearch.currentResult')}>
-        <header class="pane-header preview-header"><strong>{t('smartSearch.previewTab')}</strong>{#if activeHit}<button class="text-button" onclick={() => void openHit(activeHit, true)}>{t('smartSearch.openEditor')} ↗</button>{/if}</header>
+        <header class="pane-header preview-header">
+          <strong>{t('smartSearch.previewTab')}</strong>
+          {#if activeHit}<button class="text-button" onclick={() => void openHit(activeHit, true)}>{t('smartSearch.openEditor')} ↗</button>{/if}
+          <button bind:this={actionsButton} class="icon-button more-actions" aria-label={t('smartSearch.moreActions')} title={t('smartSearch.moreActions')} aria-haspopup="menu" aria-expanded={actionsMenuOpen} onclick={() => void toggleActionsMenu()}>
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="5" cy="12" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="19" cy="12" r="1.7"/></svg>
+          </button>
+          {#if actionsMenuOpen}
+            <button class="menu-scrim" tabindex="-1" aria-label={t('common.close')} onclick={() => closeActionsMenu()}></button>
+            <div class="menu-panel actions-menu" bind:this={actionsMenuEl} style={`--actions-menu-top: ${actionsMenuTop}px`} role="menu" aria-label={t('smartSearch.moreActions')}>
+              {#if activeHit}
+                <button class="menu-row" role="menuitem" tabindex="-1" onclick={() => menuAction(() => copyText(markdownRef(activeHit!)))}>{t('smartSearch.copyMarkdown')}</button>
+                <button class="menu-row" role="menuitem" tabindex="-1" onclick={() => menuAction(() => copyText(simpleRef(activeHit!)))}>{t('smartSearch.copyRef')}</button>
+              {/if}
+              {#if selectedKeys.length}
+                <button class="menu-row" role="menuitem" tabindex="-1" onclick={() => menuAction(() => { selectedKeys = []; invalidateSummary() })}>{t('smartSearch.clearSelection')}</button>
+                <button class="menu-row" role="menuitem" tabindex="-1" onclick={() => menuAction(() => removeKeys(selectedKeys))}>{t('smartSearch.removeSelected')}</button>
+              {/if}
+              {#if lastRemoved.length}<button class="menu-row" role="menuitem" tabindex="-1" onclick={() => menuAction(undoRemove)}>{t('smartSearch.undo')}</button>{/if}
+              {#if settings.smartLookup.summary.enabled && authoritativeResults && visibleHits.length}
+                <div class="menu-separator" role="separator"></div>
+                <button class="menu-row summary-menu-action" role="menuitem" tabindex="-1" disabled={!lookupRunId || !summaryAgent || !hasSummaryCandidates || working} onclick={() => menuAction(generateSummary)}>{t('smartSearch.generateSummary')}</button>
+                <p class="menu-hint">{!summaryAgent ? t('smartSearch.summaryAgentUnavailable') : !hasSummaryCandidates ? t('smartSearch.summaryNeedsLine') : selectedKeys.length ? t('smartSearch.summarySelection', { n: selectedKeys.length }) : t('smartSearch.summaryVisible')}</p>
+              {/if}
+              {#if summaryText}<button class="menu-row" role="menuitem" tabindex="-1" onclick={() => menuAction(() => copyText(summaryText))}>{t('smartSearch.copySummary')}</button>{/if}
+              {#if activeHit || lastRemoved.length || summaryText}<div class="menu-separator" role="separator"></div>{/if}
+              {#each handoffAgents.filter((agent) => settings.smartLookup.handoff.defaultProvider === 'ask' || agent.id === settings.smartLookup.handoff.defaultProvider) as agent (agent.id)}
+                <button class="menu-row research-menu-action" role="menuitem" tabindex="-1" disabled={working || !inputValue.trim()} onclick={() => menuAction(() => handoff(agent.id))}>{t('smartSearch.handoff')} · {agent.harness?.harness || agent.name}</button>
+              {/each}
+              <button class="menu-row" role="menuitem" tabindex="-1" onclick={() => menuAction(() => handoff(''))}>{t('smartSearch.copyHandoff')}</button>
+              {#if handoffRun}<button class="menu-row" role="menuitem" tabindex="-1" onclick={() => menuAction(openHandoffRun)}>{t('smartSearch.openAgentRun')} ↗</button>{/if}
+            </div>
+          {/if}
+        </header>
         <div class="preview-scroll">
           {#if activeHit}
             <div class="preview-card">
@@ -1467,34 +1538,14 @@
               {#if activeHit.docDate}<time class="preview-date">{formattedDate(activeHit.docDate)}</time>{/if}
               {#if activeHit.level !== 'line' || activeHit.text.length > 3_000}<p class="block-note">{t('smartSearch.previewLimited')}</p>{/if}
               <p class="preview-text">{#each highlightParts(previewText(activeHit), highlightTerms) as part}{#if part.hit}<mark>{part.text}</mark>{:else}{part.text}{/if}{/each}</p>
-              <div class="card-actions"><button class="primary-action" onclick={() => void openHit(activeHit)}>{t('smartSearch.openEditor')} ↗</button><button class="secondary-button" onclick={() => void copyText(markdownRef(activeHit))}>{t('smartSearch.copyMarkdown')}</button><button class="text-button" onclick={() => void copyText(simpleRef(activeHit))}>{t('smartSearch.copyRef')}</button></div>
             </div>
           {:else}<div class="state preview-empty"><span class="empty-mark">{@render magnifier(28)}</span><p>{t('smartSearch.previewHint')}</p></div>{/if}
 
-          {#if settings.smartLookup.summary.enabled && authoritativeResults && visibleHits.length}
-            <section class="next-actions">
-              <div class="action-copy"><strong>{t('smartSearch.quickSummary')}</strong><small>{selectedKeys.length ? t('smartSearch.summarySelection', { n: selectedKeys.length }) : t('smartSearch.summaryVisible')}</small></div>
-              <button class="secondary-button" disabled={!lookupRunId || !summaryAgent || !hasSummaryCandidates || working} onclick={() => void generateSummary()}>{summaryBusy ? t('smartSearch.summaryWorking') : t('smartSearch.generateSummary')}</button>
-              {#if !summaryAgent || !hasSummaryCandidates}<p class="action-hint">{!summaryAgent ? t('smartSearch.summaryAgentUnavailable') : t('smartSearch.summaryNeedsLine')}</p>{/if}
-              {#if summaryError}<p class="summary-error" role="alert">{summaryError}</p>{/if}
-              {#if summaryText && summarySources.length}
-                <div class="summary-card" bind:this={summaryCardEl}><header>{t('smartSearch.basedOnMatches')}</header><p>{summaryText}</p><div class="summary-sources">{#each summarySources as source}<button onclick={() => { const hit = store.hits.find((candidate) => candidate.path === source.path && candidate.line === source.line); if (hit) void openHit(hit, true) }}>[{source.id}] {basename(source.path)}</button>{/each}</div><button class="text-button" onclick={() => void copyText(summaryText)}>{t('smartSearch.copySummary')}</button></div>
-              {/if}
-            </section>
+          {#if summaryError}<p class="summary-error" role="alert">{summaryError}</p>{/if}
+          {#if summaryText && summarySources.length}
+            <div class="summary-card" bind:this={summaryCardEl}><header><strong>{t('smartSearch.quickSummary')}</strong><span>{t('smartSearch.basedOnMatches')}</span></header><p>{summaryText}</p><div class="summary-sources">{#each summarySources as source}<button onclick={() => { const hit = store.hits.find((candidate) => candidate.path === source.path && candidate.line === source.line); if (hit) void openHit(hit, true) }}>[{source.id}] {basename(source.path)}</button>{/each}</div></div>
           {/if}
-          <section class="next-actions handoff-section">
-            <div class="action-copy"><strong>{t('smartSearch.settingsHandoff')}</strong><small>{needsDeepAgent ? t('smartSearch.deepAgentRecommended') : t('smartSearch.handoffHint')}</small></div>
-            <button class="secondary-button handoff-button" aria-expanded={handoffMenuOpen} disabled={working || !inputValue.trim()} onclick={() => { const configured = settings.smartLookup.handoff.defaultProvider; if (configured === 'ask') handoffMenuOpen = !handoffMenuOpen; else void handoff(configured) }}>{t('smartSearch.handoff')} <span aria-hidden="true">⌄</span></button>
-            {#if handoffMenuOpen}
-              <button class="menu-scrim" aria-label={t('common.close')} onclick={() => { handoffMenuOpen = false }}></button>
-              <div class="menu-panel handoff-menu" role="group" aria-label={t('smartSearch.handoff')}>
-                {#each handoffAgents as agent (agent.id)}<button class="menu-row" onclick={() => void handoff(agent.id)}>{agent.harness?.harness || agent.name}</button>{/each}
-                <button class="menu-row" onclick={() => void handoff()}>{t('smartSearch.copyHandoff')}</button>
-              </div>
-            {/if}
-            {#if handoffRun}<button class="text-button run-link" onclick={openHandoffRun}>{t('smartSearch.openAgentRun')} ↗</button>{/if}
-            {#if handoffError}<p class="action-hint">{handoffError}</p>{/if}
-          </section>
+          {#if handoffError}<p class="action-hint" role="status">{handoffError}</p>{/if}
         </div>
       </article>
     </section>
@@ -1652,10 +1703,10 @@
   .stop-square { width: 9px; height: 9px; border-radius: 2px; background: currentColor; }
   .icon-button { border: 0; background: transparent; color: var(--smart-muted); display: grid; place-items: center; width: 30px; height: 32px; padding: 0; border-radius: 6px; flex-shrink: 0; }
   .icon-button:hover { background: var(--smart-soft); }
-  .input-hint { display: flex; justify-content: space-between; gap: 16px; padding: 9px 2px 0; font-size: 11px; color: var(--smart-muted); }
-  .plan-summary { display: flex; gap: 6px; flex-wrap: wrap; padding: 7px 20px 11px; flex-shrink: 0; max-height: 90px; overflow: auto; background: color-mix(in srgb, CanvasText 2.5%, Canvas); }
-  .plan-summary > span { display: inline-flex; align-items: center; gap: 5px; padding: 4px 8px; border: 1px solid var(--smart-border); border-radius: 6px; color: var(--smart-muted); font-size: 11px; }
-  .plan-summary .date-chip { background: color-mix(in srgb, var(--smart-accent) 7%, Canvas); border-color: color-mix(in srgb, var(--smart-accent) 15%, transparent); color: var(--smart-accent); }
+  .input-hint { padding: 9px 2px 0; font-size: 11px; color: var(--smart-muted); }
+  .plan-summary { display: flex; gap: 6px 12px; flex-wrap: wrap; padding: 2px 22px 12px; flex-shrink: 0; max-height: 90px; overflow: auto; background: color-mix(in srgb, CanvasText 2.5%, Canvas); }
+  .plan-summary > span { display: inline-flex; align-items: center; gap: 5px; color: var(--smart-muted); font-size: 11px; line-height: 1.5; }
+  .plan-summary .date-chip { color: var(--smart-accent); }
   .plan-summary .warning-chip { color: #ad7000; }
   .preview-warning, .agent-warning, .navigation-error, .partial-note { flex-shrink: 0; display: flex; align-items: center; gap: 10px; padding: 9px 20px; background: color-mix(in srgb, #dc9800 9%, Canvas); font-size: 12px; line-height: 1.45; }
   .preview-warning > span, .agent-warning > span, .navigation-error > span { flex: 1; min-width: 0; }
@@ -1690,6 +1741,7 @@
   .pane-header strong { margin-right: auto; font-size: 12px; font-weight: 600; }
   .pane-header > span { color: var(--smart-muted); font-size: 11px; white-space: nowrap; }
   .pane-header select { max-width: 122px; min-width: 0; height: 27px; border: 0; border-radius: 6px; background: transparent; color: var(--smart-muted); font-size: 11px; }
+  .preview-header { position: relative; }
   .selection-bar { flex-shrink: 0; display: flex; align-items: center; gap: 12px; padding: 5px 16px; border-bottom: 1px solid var(--smart-border); font-size: 11px; }
   .selection-bar > span { margin-right: auto; color: var(--smart-muted); }
   .results-scroll { flex: 1; min-height: 0; overflow-y: auto; padding: 7px 9px; }
@@ -1708,7 +1760,6 @@
   .result-copy p { margin: 5px 0 7px; overflow: hidden; display: -webkit-box; line-clamp: 2; -webkit-line-clamp: 2; -webkit-box-orient: vertical; color: color-mix(in srgb, CanvasText 82%, transparent); font-size: 12px; line-height: 1.55; overflow-wrap: anywhere; }
   mark { border-radius: 2px; background: color-mix(in srgb, #edbd42 30%, transparent); color: inherit; }
   .result-meta { display: flex; gap: 8px; color: var(--smart-muted); font-size: 11px; flex-wrap: wrap; }
-  .results-footer { flex-shrink: 0; padding: 9px 16px; color: var(--smart-muted); font-size: 11px; border-top: 1px solid var(--smart-border); }
   .preview-scroll { flex: 1; min-height: 0; overflow-y: auto; padding: 0 28px 20px; }
   .preview-card { padding: 26px 0; }
   .preview-location { color: var(--smart-muted); font-size: 11px; overflow-wrap: anywhere; line-height: 1.5; }
@@ -1716,25 +1767,22 @@
   .preview-date { color: var(--smart-muted); font-size: 12px; }
   .preview-card .preview-text { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 14px; line-height: 1.85; margin: 22px 0 0; }
   .block-note { margin: 15px 0 0; padding: 9px 11px; background: var(--smart-soft); border-radius: 6px; color: var(--smart-muted); font-size: 12px; line-height: 1.5; }
-  .card-actions { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; margin-top: 24px; }
   .secondary-button { border: 1px solid var(--smart-border); border-radius: 7px; background: Canvas; padding: 6px 10px; font-size: 12px; min-height: 31px; }
   .secondary-button:hover { background: var(--smart-soft); }
   .text-button { padding: 3px 0; background: transparent; border: 0; color: var(--smart-accent); font-size: 12px; }
-  .next-actions { position: relative; display: grid; grid-template-columns: minmax(0,1fr) auto; gap: 8px 14px; padding: 20px 0; border-top: 1px solid var(--smart-border); align-items: center; }
-  .action-copy { display: grid; gap: 5px; }
-  .action-copy strong { font-size: 13px; font-weight: 600; }
-  .action-copy small, .action-hint { color: var(--smart-muted); font-size: 12px; line-height: 1.5; }
-  .action-hint, .summary-error { grid-column: 1 / -1; margin: 0; font-size: 12px; }
+  .action-hint, .summary-error { margin: 0 0 16px; font-size: 12px; line-height: 1.5; color: var(--smart-muted); }
   .summary-error { color: #c93434; }
-  .summary-card { grid-column: 1 / -1; background: var(--smart-soft); border-radius: 9px; padding: 14px; margin-top: 5px; }
-  .summary-card header { color: var(--smart-muted); font-size: 11px; }
+  .summary-card { border-top: 1px solid var(--smart-border); padding: 20px 0; }
+  .summary-card header { display: grid; gap: 6px; color: var(--smart-muted); font-size: 11px; }
+  .summary-card header strong { color: CanvasText; font-size: 13px; }
   .summary-card p { font-size: 14px; line-height: 1.75; white-space: pre-wrap; }
   .summary-sources { display: flex; gap: 7px; flex-wrap: wrap; margin-bottom: 12px; }
   .summary-sources button { border: 0; background: transparent; color: var(--smart-accent); padding: 0; font-size: 11px; text-align: left; overflow-wrap: anywhere; }
-  .handoff-menu { position: absolute; z-index: 12; bottom: 58px; right: 0; min-width: 200px; max-width: 100%; }
+  .actions-menu { position: fixed; z-index: 12; top: var(--actions-menu-top); right: 12px; width: 240px; max-width: calc(100vw - 24px); max-height: min(440px, calc(100dvh - var(--actions-menu-top) - 12px)); overflow-y: auto; box-sizing: border-box; }
+  .menu-hint { margin: 2px 9px 8px; color: var(--smart-muted); font-size: 11px; line-height: 1.5; }
+  .menu-separator { border-top: 1px solid var(--smart-border); margin: 5px 3px; }
   .menu-row { width: 100%; border: 0; background: transparent; text-align: left; padding: 7px 9px; }
   .menu-scrim { position: fixed; inset: 0; z-index: 11; background: transparent; border: 0; }
-  .run-link { grid-column: 1 / -1; text-align: left; }
   .state { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 13px; padding: 48px 20px; text-align: center; color: var(--smart-muted); font-size: 13px; line-height: 1.6; }
   .state strong { color: CanvasText; font-weight: 550; }
   .state p { margin: 0; }

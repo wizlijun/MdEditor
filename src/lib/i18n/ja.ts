@@ -721,6 +721,7 @@ export const ja: Record<keyof Messages, string> = {
   'smartSearch.agentFailed': 'AI サービスを一時的に利用できません。再試行するか、設定で別のサービスを選んでください。',
   'smartSearch.agentTimeout': '通常より時間がかかっています。再試行するか、設定で制限時間を調整してください。',
   'smartSearch.agentIncomplete': '質問を読み取れませんでした。別の言い方でお試しください。',
+  'smartSearch.moreActions': 'その他の操作',
 
   // Search & index settings tab
   'search.index.noVault': 'vault を開くと検索インデックスの状態が表示されます。',

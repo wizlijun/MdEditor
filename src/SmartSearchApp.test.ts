@@ -5,7 +5,7 @@ import type { SearchHit, SmartSearchHit, SmartSearchResponse } from './lib/searc
 
 const mocks = vi.hoisted(() => ({
   invoke: vi.fn(),
-  writeText: vi.fn(async () => {}),
+  writeText: vi.fn(async (_text: string) => {}),
   setTitle: vi.fn(async () => {}),
   setSize: vi.fn(async () => {}),
   center: vi.fn(async () => {}),
@@ -314,6 +314,21 @@ function buttonNamed(label: string): HTMLButtonElement {
   return button!
 }
 
+async function openActionsMenu(): Promise<HTMLElement> {
+  if (!document.querySelector('.actions-menu')) {
+    document.querySelector<HTMLButtonElement>('.more-actions')!.click()
+  }
+  await vi.waitFor(() => expect(document.querySelector('.actions-menu[role="menu"]')).not.toBeNull())
+  return document.querySelector<HTMLElement>('.actions-menu')!
+}
+
+async function chooseMenuAction(label: string): Promise<void> {
+  await openActionsMenu()
+  buttonNamed(label).click()
+  await tick()
+  expect(document.querySelector('.actions-menu')).toBeNull()
+}
+
 async function pressEnter(input: HTMLTextAreaElement): Promise<void> {
   input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
   await tick()
@@ -537,9 +552,9 @@ describe('SmartSearchApp Smart Lookup workflow', () => {
       call[0] === 'notemd_smart_search' && call[1]?.deep === true
     ))).toBe(true)
 
-    buttonNamed('Copy reference').click()
+    await chooseMenuAction('Copy reference')
     await vi.waitFor(() => expect(mocks.writeText).toHaveBeenCalledWith('notes/alpha.md:4'))
-    document.querySelector<HTMLButtonElement>('.primary-action')?.click()
+    document.querySelector<HTMLButtonElement>('.preview-header .text-button')!.click()
     await vi.waitFor(() => expect(mocks.invoke).toHaveBeenCalledWith(
       'editor_show_and_reveal_search_hit', expect.objectContaining({ path: '/vault/notes/alpha.md' }),
     ))
@@ -567,9 +582,9 @@ describe('SmartSearchApp Smart Lookup workflow', () => {
     expect(taskStarts('search-summary')).toHaveLength(0)
     document.querySelector<HTMLElement>('.result-row')!.click()
     await vi.waitFor(() => expect(document.querySelector('.selection-bar')).not.toBeNull())
-    buttonNamed('Hide selected results').click()
+    await chooseMenuAction('Hide selected results')
     await vi.waitFor(() => expect(document.querySelectorAll('.result-row')).toHaveLength(2))
-    document.querySelector<HTMLButtonElement>('.next-actions:not(.handoff-section) > button')?.click()
+    await chooseMenuAction('Create answer')
     await vi.waitFor(() => expect(document.querySelector('.summary-card')?.textContent).toContain('[S1]'))
 
     expect(taskStarts('search-summary')).toHaveLength(0)
@@ -591,10 +606,8 @@ describe('SmartSearchApp Smart Lookup workflow', () => {
     await pressEnter(input)
     mocks.statusResults.push({ state: 'running', steps: 1, last: 'do not render' })
 
-    document.querySelector<HTMLButtonElement>('.next-actions:not(.handoff-section) > button')?.click()
-    await vi.waitFor(() => expect(document.querySelector<HTMLButtonElement>(
-      '.next-actions:not(.handoff-section) > button',
-    )?.textContent).toContain('…'))
+    await chooseMenuAction('Create answer')
+    await vi.waitFor(() => expect(document.querySelector('.stop-button')).not.toBeNull())
 
     input.value = 'new question'
     input.dispatchEvent(new InputEvent('input', { bubbles: true, data: 'new question' }))
@@ -613,7 +626,7 @@ describe('SmartSearchApp Smart Lookup workflow', () => {
     await typeAndWait(input)
     await pressEnter(input)
 
-    document.querySelector<HTMLButtonElement>('.next-actions:not(.handoff-section) > button')?.click()
+    await chooseMenuAction('Create answer')
     await vi.waitFor(() => expect(mocks.invoke.mock.calls.some((call) => (
       call[0] === 'smart_lookup_start_summary'
     ))).toBe(true))
@@ -638,7 +651,8 @@ describe('SmartSearchApp Smart Lookup workflow', () => {
     await pressEnter(input)
 
     expect(document.querySelector('.block-note')?.textContent).toContain('Open the original to keep reading')
-    expect(document.querySelector<HTMLButtonElement>('.next-actions:not(.handoff-section) > button')?.disabled).toBe(true)
+    await openActionsMenu()
+    expect(document.querySelector<HTMLButtonElement>('.summary-menu-action')?.disabled).toBe(true)
     expect(document.body.textContent).not.toContain('invalid source line range')
     expect(mocks.invoke.mock.calls.filter((call) => call[0] === 'smart_lookup_start_summary')).toHaveLength(0)
     expect(mocks.invoke.mock.calls.some((call) => OLD_COMMANDS.has(String(call[0])))).toBe(false)
@@ -675,9 +689,8 @@ describe('SmartSearchApp Smart Lookup workflow', () => {
     await typeAndWait(input)
     await pressEnter(input)
 
-    document.querySelector<HTMLButtonElement>('.handoff-button')?.click()
-    await vi.waitFor(() => expect(document.querySelector('.handoff-menu')).not.toBeNull())
-    document.querySelector<HTMLButtonElement>('.handoff-menu .menu-row')?.click()
+    await openActionsMenu()
+    document.querySelector<HTMLButtonElement>('.research-menu-action')!.click()
     await vi.waitFor(() => expect(mocks.invoke.mock.calls.filter((call) => (
       call[0] === 'smart_lookup_start_handoff'
     ))).toHaveLength(1))
@@ -699,9 +712,8 @@ describe('SmartSearchApp Smart Lookup workflow', () => {
     await typeAndWait(input)
     await pressEnter(input)
 
-    document.querySelector<HTMLButtonElement>('.handoff-button')?.click()
-    await vi.waitFor(() => expect(document.querySelector('.handoff-menu')).not.toBeNull())
-    document.querySelector<HTMLButtonElement>('.handoff-menu .menu-row')?.click()
+    await openActionsMenu()
+    document.querySelector<HTMLButtonElement>('.research-menu-action')!.click()
     await vi.waitFor(() => expect(mocks.invoke.mock.calls.some((call) => (
       call[0] === 'smart_lookup_start_handoff'
     ))).toBe(true))
@@ -738,7 +750,7 @@ describe('SmartSearchApp Smart Lookup workflow', () => {
     rows[1].dispatchEvent(new MouseEvent('click', { bubbles: true, metaKey: true }))
 
     await vi.waitFor(() => expect(document.querySelector('.selection-bar')?.textContent).toContain('2 selected'))
-    buttonNamed('Hide selected results').click()
+    await chooseMenuAction('Hide selected results')
     await vi.waitFor(() => expect(document.querySelectorAll('.result-row')).toHaveLength(1))
     buttonNamed('Undo').click()
     await vi.waitFor(() => expect(document.querySelectorAll('.result-row')).toHaveLength(3))
@@ -775,7 +787,7 @@ describe('SmartSearchApp Smart Lookup workflow', () => {
     await typeAndWait(input)
     await pressEnter(input)
     mocks.summaryStartGate = new Promise<void>((resolve) => { releaseStart = resolve })
-    document.querySelector<HTMLButtonElement>('.next-actions:not(.handoff-section) > button')?.click()
+    await chooseMenuAction('Create answer')
     await vi.waitFor(() => expect(document.querySelector('.stop-button')).not.toBeNull())
 
     input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
@@ -919,12 +931,12 @@ describe('SmartSearchApp Smart Lookup workflow', () => {
     const input = await mountReady()
     await typeAndWait(input)
     await pressEnter(input)
-    document.querySelector<HTMLButtonElement>('.card-actions .text-button')!.click()
+    await chooseMenuAction('Copy reference')
     await vi.waitFor(() => {
       expect(mocks.writeText).toHaveBeenCalledWith('notes/alpha.md:4')
       expect(document.querySelector('.copy-feedback')?.textContent).toBe('Copied')
     })
-    document.querySelector<HTMLButtonElement>('.next-actions:not(.handoff-section) > button')!.click()
+    await chooseMenuAction('Create answer')
     await vi.waitFor(() => expect(document.querySelector('.summary-card')).not.toBeNull())
     document.querySelector<HTMLButtonElement>('.clear-button')!.click()
     await vi.waitFor(() => {
@@ -944,7 +956,7 @@ describe('SmartSearchApp Smart Lookup workflow', () => {
     const browserCopy = vi.spyOn(navigator.clipboard, 'writeText')
       .mockRejectedValueOnce(new Error('browser clipboard denied'))
     try {
-      buttonNamed('Copy reference').click()
+      await chooseMenuAction('Copy reference')
       await vi.waitFor(() => {
         expect(browserCopy).toHaveBeenCalledWith('notes/alpha.md:4')
         expect(document.querySelector('.copy-feedback')?.textContent).toBe('Could not copy. Please try again.')
@@ -986,7 +998,7 @@ describe('SmartSearchApp Smart Lookup workflow', () => {
     await typeAndWait(input)
     await pressEnter(input)
     mocks.statusResults.push(new Promise((resolve) => { finishSummary = resolve }))
-    document.querySelector<HTMLButtonElement>('.next-actions:not(.handoff-section) > button')!.click()
+    await chooseMenuAction('Create answer')
     await vi.waitFor(() => expect(mocks.invoke.mock.calls.some((call) => (
       call[0] === 'plugin_v2_execute' && call[1]?.command === 'run-status'
         && call[1]?.context?.task === 'search-summary'
@@ -996,7 +1008,6 @@ describe('SmartSearchApp Smart Lookup workflow', () => {
     await vi.waitFor(() => {
       expect(document.querySelector('.selection-bar')?.textContent).toContain('1 selected')
       expect(document.querySelector('.stop-button')).toBeNull()
-      expect(document.querySelector<HTMLButtonElement>('.next-actions:not(.handoff-section) > button')?.disabled).toBe(false)
       expect(mocks.invoke.mock.calls.some((call) => (
         call[0] === 'plugin_v2_execute' && call[1]?.command === 'run-cancel'
           && call[1]?.context?.task === 'search-summary'
@@ -1009,7 +1020,9 @@ describe('SmartSearchApp Smart Lookup workflow', () => {
     await new Promise((resolve) => setTimeout(resolve, 0))
     expect(document.querySelector('.summary-card')).toBeNull()
     expect(document.body.textContent).not.toContain('OLD_SELECTION_ANSWER')
-    expect(document.querySelector('.next-actions:not(.handoff-section) .action-copy')?.textContent).toContain('Using 1 selected results')
+    await openActionsMenu()
+    expect(document.querySelector<HTMLButtonElement>('.summary-menu-action')?.disabled).toBe(false)
+    expect(document.querySelector('.actions-menu .menu-hint')?.textContent).toContain('Using 1 selected results')
   })
 
   it.each([
@@ -1035,5 +1048,123 @@ describe('SmartSearchApp Smart Lookup workflow', () => {
     expect(document.querySelector('[role="log"]')?.textContent).toContain('Local matches are still available')
     expect(document.querySelector('[role="log"]')?.textContent).toContain(message)
     expect(mocks.invoke.mock.calls.filter((call) => call[0] === 'notemd_planned_search')).toHaveLength(0)
+  })
+
+  it('shows the first result content directly with one open action and no action panels', async () => {
+    const input = await mountReady()
+    await typeAndWait(input)
+    await pressEnter(input)
+
+    expect(document.querySelector('.preview-text')?.textContent).toContain('PRIVATE_BODY_alpha')
+    expect(document.querySelector('.result-row.active strong')?.textContent).toBe('alpha')
+    expect(document.querySelectorAll('.preview-header > button')).toHaveLength(2)
+    expect(Array.from(document.querySelectorAll<HTMLButtonElement>('button'))
+      .filter((button) => button.textContent?.trim() === 'Open original ↗')).toHaveLength(1)
+    expect(document.querySelectorAll('.preview-scroll button')).toHaveLength(0)
+    expect(document.querySelector('.actions-menu')).toBeNull()
+    expect(document.querySelector('.next-actions')).toBeNull()
+    expect(document.querySelector('.card-actions')).toBeNull()
+    expect(document.querySelector('.input-hint')).toBeNull()
+    expect(document.querySelector('.results-footer')).toBeNull()
+    expect(mocks.invoke.mock.calls.filter((call) => call[0] === 'smart_lookup_start_summary')).toHaveLength(0)
+    expect(mocks.invoke.mock.calls.filter((call) => call[0] === 'smart_lookup_start_handoff')).toHaveLength(0)
+
+    document.querySelectorAll<HTMLElement>('.result-row')[1].click()
+    await vi.waitFor(() => expect(document.querySelector('.preview-text')?.textContent).toContain('PRIVATE_BODY_beta'))
+    expect(document.querySelectorAll('.selection-bar button')).toHaveLength(0)
+    await chooseMenuAction('Clear selection')
+    await vi.waitFor(() => expect(document.querySelector('.selection-bar')).toBeNull())
+    expect(document.querySelector('.preview-text')?.textContent).toContain('PRIVATE_BODY_beta')
+    expect(taskStarts('search-plan')).toHaveLength(1)
+  })
+
+  it('opens and navigates the actions menu without model calls and returns focus on dismissal', async () => {
+    const input = await mountReady()
+    await typeAndWait(input)
+    await pressEnter(input)
+    const callsBefore = mocks.invoke.mock.calls.length
+    const trigger = document.querySelector<HTMLButtonElement>('.more-actions')!
+    const menu = await openActionsMenu()
+    const items = Array.from(menu.querySelectorAll<HTMLButtonElement>('button:not(:disabled)'))
+    expect(trigger.getAttribute('aria-haspopup')).toBe('menu')
+    expect(trigger.getAttribute('aria-expanded')).toBe('true')
+    expect(document.activeElement).toBe(items[0])
+    items[0].dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }))
+    expect(document.activeElement).toBe(items[1])
+    items[1].dispatchEvent(new KeyboardEvent('keydown', { key: 'End', bubbles: true }))
+    expect(document.activeElement).toBe(items.at(-1))
+    items.at(-1)!.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }))
+    expect(document.activeElement).toBe(items[0])
+    items[0].dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowUp', bubbles: true }))
+    expect(document.activeElement).toBe(items.at(-1))
+    items.at(-1)!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Home', bubbles: true }))
+    expect(document.activeElement).toBe(items[0])
+    items[0].dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+    await vi.waitFor(() => {
+      expect(document.querySelector('.actions-menu')).toBeNull()
+      expect(trigger.getAttribute('aria-expanded')).toBe('false')
+      expect(document.activeElement).toBe(trigger)
+    })
+    await openActionsMenu()
+    document.querySelector<HTMLButtonElement>('.menu-scrim')!.click()
+    await vi.waitFor(() => {
+      expect(document.querySelector('.actions-menu')).toBeNull()
+      expect(document.activeElement).toBe(trigger)
+    })
+    expect(mocks.invoke.mock.calls).toHaveLength(callsBefore)
+    expect(mocks.invoke).not.toHaveBeenCalledWith('hide_smart_search_window')
+  })
+
+  it('only copies research instructions even when a default research provider is configured', async () => {
+    mocks.storedSmartLookup = { handoff: { defaultProvider: 'notemd.test-agent' } }
+    const input = await mountReady()
+    await typeAndWait(input)
+    await pressEnter(input)
+    await chooseMenuAction('Copy research instructions')
+    await vi.waitFor(() => expect(mocks.writeText).toHaveBeenCalledOnce())
+    const copied = mocks.writeText.mock.calls[0]?.[0]
+    expect(copied).toContain('release risk')
+    expect(copied).toContain('notes/alpha.md')
+    expect(copied).not.toContain('PRIVATE_BODY_')
+    expect(copied).not.toContain('/vault/')
+    expect(mocks.invoke.mock.calls.filter((call) => call[0] === 'smart_lookup_start_handoff')).toHaveLength(0)
+    expect(mocks.invoke.mock.calls.filter((call) => call[0] === 'plugin_v2_open_window')).toHaveLength(0)
+    expect(taskStarts('vault-research')).toHaveLength(0)
+    expect(document.querySelector('.copy-feedback')?.textContent).toBe('Copied')
+  })
+
+  it('keeps research available in the menu when no results are found', async () => {
+    mocks.preview = 'empty'
+    mocks.plannedKind = 'empty'
+    mocks.storedSmartLookup = { results: { autoDeepOnZero: false } }
+    const input = await mountReady()
+    await typeAndWait(input)
+    await pressEnter(input)
+    expect(document.querySelectorAll('.result-row')).toHaveLength(0)
+    await openActionsMenu()
+    expect(document.querySelector('.summary-menu-action')).toBeNull()
+    const research = document.querySelector<HTMLButtonElement>('.research-menu-action')!
+    expect(research.disabled).toBe(false)
+    research.click()
+    await vi.waitFor(() => expect(mocks.invoke.mock.calls.filter((call) => call[0] === 'smart_lookup_start_handoff')).toHaveLength(1))
+    expect(mocks.invoke.mock.calls.find((call) => call[0] === 'smart_lookup_start_handoff')?.[1]?.selectedRefs).toEqual([])
+    expect(taskStarts('search-plan')).toHaveLength(1)
+  })
+
+  it('shows a summary failure in the content after its menu has closed', async () => {
+    const input = await mountReady()
+    await typeAndWait(input)
+    await pressEnter(input)
+    mocks.statusResults.push({
+      state: 'done', record: { status: 'error' },
+      terminal_result: { complete: true, content: 'PRIVATE_FAILED_SUMMARY_BODY' },
+    })
+    await chooseMenuAction('Create answer')
+    await vi.waitFor(() => expect(document.querySelector('.summary-error[role="alert"]')?.textContent).toContain('The AI service is temporarily unavailable'))
+    expect(document.querySelector('.actions-menu')).toBeNull()
+    expect(document.querySelector('.summary-card')).toBeNull()
+    expect(document.querySelector('.preview-text')?.textContent).toContain('PRIVATE_BODY_alpha')
+    expect(document.body.textContent).not.toContain('PRIVATE_FAILED_SUMMARY_BODY')
+    expect(document.querySelector('.stop-button')).toBeNull()
   })
 })

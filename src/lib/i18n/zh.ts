@@ -755,6 +755,7 @@ export const zh: Record<keyof Messages, string> = {
   'smartSearch.agentFailed': 'AI 服务暂时不可用，请重试或在设置中更换服务。',
   'smartSearch.agentTimeout': '等待时间较长，请重试或在设置中调整等待时间。',
   'smartSearch.agentIncomplete': '未能理解这次问题，请换一种说法重试。',
+  'smartSearch.moreActions': '更多操作',
 
   // Search & index settings tab
   'search.index.noVault': '打开一个 vault 后即可查看搜索索引状态。',
