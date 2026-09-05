@@ -1,6 +1,7 @@
 export * from './types'
 export * from './json-canvas'
 export * from './model'
+export * from './interactions'
 export * from './flow-adapter'
 export * from './history'
 export * from './session'

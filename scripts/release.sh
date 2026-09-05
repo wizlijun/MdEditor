@@ -133,7 +133,7 @@ cd "$ROOT"
 
 say "pre-flight"
 
-git diff --quiet && git diff --cached --quiet \
+[[ -z "$(git status --porcelain)" ]] \
   || die "working tree is dirty — commit or stash first"
 
 BRANCH=$(git rev-parse --abbrev-ref HEAD)
@@ -215,7 +215,11 @@ fi
 
 say "running tests"
 pnpm -s test
+pnpm -s check
 pnpm -s check:protocol
+pnpm audit --prod --audit-level=high
+cargo test --manifest-path src-tauri/Cargo.toml canvas_
+cargo test --manifest-path src-tauri/Cargo.toml --test mobile_project_config
 
 # ---------- bump versions ----------
 
@@ -269,6 +273,10 @@ rustup target add aarch64-apple-darwin x86_64-apple-darwin >/dev/null 2>&1 || tr
 # arrays, so we stash results in arch-suffixed variables (e.g. DMG_STAGED_AARCH64).
 STAGED_ASSETS=()
 
+is_transient_apple_service_failure() {
+  grep -Eq 'HTTPClientError\.(connectTimeout|deadlineExceeded)|abortedUpload|timestamp service is not available|A timestamp was expected but was not found|NSURLErrorDomain Code=-1200|A TLS error caused the secure connection to fail' "$1"
+}
+
 tauri_build_with_apple_retries() {
   local arch="$1" attempt=1 max_attempts=3 log rc
   while :; do
@@ -282,13 +290,52 @@ tauri_build_with_apple_retries() {
       rm -f "$log"
       return 0
     fi
-    if (( attempt >= max_attempts )) ||
-       ! grep -Eq 'HTTPClientError\.(connectTimeout|deadlineExceeded)|abortedUpload|timestamp service is not available|A timestamp was expected but was not found|NSURLErrorDomain Code=-1200|A TLS error caused the secure connection to fail' "$log"; then
+    if (( attempt >= max_attempts )) || ! is_transient_apple_service_failure "$log"; then
       rm -f "$log"
       return "$rc"
     fi
 
     say "Apple signing/notarization service failed transiently; retrying $arch ($(( attempt + 1 ))/$max_attempts)"
+    rm -f "$log"
+    attempt=$(( attempt + 1 ))
+    sleep 5
+  done
+}
+
+notarize_dmg_with_apple_retries() {
+  local dmg="$1" arch_tag="$2" attempt=1 max_attempts=3 log rc submission_id=""
+  while :; do
+    log=$(mktemp -t notemd-dmg-notarize)
+    set +e
+    if [[ -n "$submission_id" ]]; then
+      xcrun notarytool wait "$submission_id" \
+        --apple-id "$APPLE_ID" --password "$APPLE_PASSWORD" \
+        --team-id "$APPLE_TEAM_ID" 2>&1 | tee "$log"
+    else
+      xcrun notarytool submit "$dmg" \
+        --apple-id "$APPLE_ID" --password "$APPLE_PASSWORD" \
+        --team-id "$APPLE_TEAM_ID" --wait 2>&1 | tee "$log"
+    fi
+    rc=${PIPESTATUS[0]}
+    set -e
+
+    if (( rc == 0 )); then
+      rm -f "$log"
+      return 0
+    fi
+    if [[ -z "$submission_id" ]]; then
+      submission_id=$(sed -nE 's/^[[:space:]]*id:[[:space:]]*([0-9a-fA-F-]+)[[:space:]]*$/\1/p' "$log" | head -1)
+    fi
+    if (( attempt >= max_attempts )) || ! is_transient_apple_service_failure "$log"; then
+      rm -f "$log"
+      return "$rc"
+    fi
+
+    if [[ -n "$submission_id" ]]; then
+      say "Apple notary wait failed transiently; resuming $arch_tag submission $submission_id ($(( attempt + 1 ))/$max_attempts)"
+    else
+      say "Apple DMG submission failed transiently; retrying $arch_tag ($(( attempt + 1 ))/$max_attempts)"
+    fi
     rm -f "$log"
     attempt=$(( attempt + 1 ))
     sleep 5
@@ -322,9 +369,7 @@ build_arch() {
   # ticket does not cover the outer image: submit and staple the exact DMG bytes
   # that will be uploaded, and fail before publication if Gatekeeper rejects it.
   say "notarizing distributable DMG for $arch_tag"
-  xcrun notarytool submit "$dmg_staged" \
-    --apple-id "$APPLE_ID" --password "$APPLE_PASSWORD" \
-    --team-id "$APPLE_TEAM_ID" --wait
+  notarize_dmg_with_apple_retries "$dmg_staged" "$arch_tag"
   xcrun stapler staple "$dmg_staged"
   xcrun stapler validate "$dmg_staged"
   codesign --verify --strict --verbose=2 "$dmg_staged"

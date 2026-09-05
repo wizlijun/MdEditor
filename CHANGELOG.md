@@ -7,6 +7,42 @@ For the full commit history, see the git log.
 
 ## Unreleased
 
+## v6.905.5 — 2026-09-05
+
+### Changed
+
+- **The table of contents uses a cleaner current-position highlight.** The blue highlight remains easy to spot without the extra dark strip on its left edge.
+
+## v6.905.4 — 2026-09-05
+
+### Changed
+
+- **The table of contents now follows your reading position.** While it is open, scrolling a Markdown article in Rich or Source mode highlights the corresponding heading, including when multiple headings share the same title.
+
+## v6.905.3 — 2026-09-05
+
+### Added
+
+- **A read-only table of contents makes long Markdown articles faster to navigate.** Open the new outline-style view beside Sidecar Notes and History to preview the current document's heading hierarchy—including unsaved edits—and jump directly to any section, even when heading titles repeat.
+
+## v6.905.2 — 2026-09-05
+
+### Changed
+
+- **Infinite Canvas controls are easier to scan and stay close to the work.** A centered icon dock now groups creation, navigation, clipboard and history actions, while selection-aware toolbars expose the relevant node, multi-selection, group and connection controls beside the canvas content. Refined cards, group labels, handles and selection states improve visual feedback, and multiple selected nodes can receive one color in a single action.
+
+## v6.905.1 — 2026-09-05
+
+### Added
+
+- **Infinite Canvas gains a fuller editing toolset.** Switch between select, pan, freeform lasso and frame drawing; align, distribute or separate overlapping selections with smart guides; resize multiple cards together; and fit groups around their contents. Connections choose sensible facing sides and their labels edit in place. Touch drawing yields to navigation when a second finger arrives, new and pasted cards follow the last pointer position, and view locking, simplified low-zoom rendering and indexed geometry keep larger boards easier to navigate.
+
+## v6.904.8 — 2026-09-05
+
+### Fixed
+
+- **The governed Memory document now supports normal Markdown editing.** Enter and Shift+Enter, multi-paragraph paste, text insertion and deletion, and undo/redo work inside one stable knowledge block; continuous typing is coalesced before durable save without losing IME input or remapping an acknowledged editor state. Edits that cross governed block boundaries still stop safely instead of guessing identity. Requires Memory 2.5.1.
+
 ## v6.904.7 — 2026-09-04
 
 ### Added

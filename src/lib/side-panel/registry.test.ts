@@ -16,6 +16,7 @@ vi.mock('../i18n/store.svelte', () => ({ t: (k: string) => k }))
 
 import {
   sidePanels, registerSideView, getSideView, loadSidePanels, toggleSideView,
+  registerBuiltinSideViews,
 } from './registry.svelte'
 import type { SideView } from './model'
 
@@ -54,6 +55,16 @@ describe('loadSidePanels migration', () => {
     await loadSidePanels()
     expect(sidePanels.left.width).toBe(260)
     expect(sidePanels.right).toEqual({ visible: true, activeId: 'git-history', width: 500 })
+  })
+})
+
+describe('built-in views', () => {
+  it('registers the table of contents beside sidecar notes and history', () => {
+    registerBuiltinSideViews()
+    expect(getSideView('outline-notes')).toMatchObject({ side: 'right', order: 0 })
+    expect(getSideView('table-of-contents')).toMatchObject({ side: 'right', order: 1 })
+    expect(getSideView('table-of-contents')?.title()).toBe('toc.title')
+    expect(getSideView('git-history')).toMatchObject({ side: 'right', order: 2 })
   })
 })
 

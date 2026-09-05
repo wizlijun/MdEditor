@@ -95,6 +95,7 @@
   })
 
   let host: HTMLDivElement | undefined = $state()
+  let scrollEl: HTMLDivElement | undefined = $state()
   let editor: EditorInstance | null = null
   let status = $state<'mounting' | 'mounted' | 'error'>('mounting')
   let errorMsg = $state<string | null>(null)
@@ -850,7 +851,58 @@
 
   import { findState } from '../lib/find-replace.svelte'
   import { reveal } from '../lib/outline/reveal.svelte'
+  import { extractTocHeadings } from '../lib/toc/headings'
+  import { isScrollAtEnd, resolveActiveHeadingIndex } from '../lib/toc/active-heading'
+  import { reportTocLocation, tocLocation } from '../lib/toc/location.svelte'
+  import { findRichRevealTarget, getPositionedRichHeadings } from '../lib/toc/reveal-target'
   import { consumeEditorFocus } from '../lib/editor-focus.svelte'
+
+  let richTocHeadings = $derived.by(() => {
+    if (tocLocation.trackedTabId !== tab.id) return []
+    return extractTocHeadings(tab.currentContent)
+  })
+  let tocLocationFrame: number | null = null
+
+  function updateRichTocLocation() {
+    if (!host || !scrollEl || tocLocation.trackedTabId !== tab.id) return
+    const allowed = new Set(richTocHeadings.map((heading) => heading.headingIndex))
+    const scrollRect = scrollEl.getBoundingClientRect()
+    const positioned = getPositionedRichHeadings(
+      host,
+      allowed,
+      scrollRect.top,
+      scrollEl.scrollTop,
+    )
+    const viewportHeight = scrollEl.clientHeight || scrollRect.height
+    reportTocLocation(tab.id, resolveActiveHeadingIndex(
+      positioned,
+      scrollEl.scrollTop + viewportHeight / 2,
+      isScrollAtEnd(scrollEl.scrollTop, viewportHeight, scrollEl.scrollHeight),
+    ))
+  }
+
+  function scheduleRichTocLocation() {
+    if (tocLocation.trackedTabId !== tab.id || tocLocationFrame != null) return
+    tocLocationFrame = requestAnimationFrame(() => {
+      tocLocationFrame = null
+      updateRichTocLocation()
+    })
+  }
+
+  $effect(() => {
+    const tracked = tocLocation.trackedTabId === tab.id
+    const headings = richTocHeadings
+    const editorHost = host
+    const scroller = scrollEl
+    const mounted = status === 'mounted'
+    if (!tracked || !mounted || !editorHost || !scroller) return
+    void headings
+    scheduleRichTocLocation()
+    return () => {
+      if (tocLocationFrame != null) cancelAnimationFrame(tocLocationFrame)
+      tocLocationFrame = null
+    }
+  })
 
   // Starts at 0, NOT at whatever is already pending: this component is rebuilt
   // by `{#key tab.id}` on every file switch, so a request issued just before
@@ -868,13 +920,7 @@
     if (!req || req.seq === lastRevealSeq || !host || status !== 'mounted') return
     if (req.path && req.path !== tab.filePath) return
     lastRevealSeq = req.seq
-    // 渲染 DOM 中按锚文本查找第一个匹配的元素
-    const walker = document.createTreeWalker(host, NodeFilter.SHOW_TEXT)
-    let target: Element | null = null
-    while (walker.nextNode()) {
-      const tn = walker.currentNode as Text
-      if (tn.textContent && tn.textContent.includes(req.text)) { target = tn.parentElement; break }
-    }
+    const target = findRichRevealTarget(host, req)
     if (target) {
       target.scrollIntoView({ behavior: 'smooth', block: 'center' })
       target.classList.add('outline-reveal-flash')
@@ -1295,7 +1341,14 @@
                   source={tab.currentContent}
                   pageBasename={(activeTab()?.filePath ?? '').replace(/^.*[\\/]/, '')} />
     {/if}
-    <div class="scroll" onmousedown={onScrollMouseDown} role="presentation">
+    <div
+      class="scroll"
+      data-tab-id={tab.id}
+      bind:this={scrollEl}
+      onscroll={scheduleRichTocLocation}
+      onmousedown={onScrollMouseDown}
+      role="presentation"
+    >
       <div class="host" data-theme={activeThemeId} bind:this={host}></div>
       {#if backlinkPage}
         <LinkedReferences page={backlinkPage} excludeFile={tab.filePath ?? null} />

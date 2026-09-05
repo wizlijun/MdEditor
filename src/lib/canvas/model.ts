@@ -217,6 +217,10 @@ export function insertCanvasNode(document: CanvasDocument, node: KnownCanvasNode
 
 export function insertCanvasEdge(document: CanvasDocument, edge: CanvasEdge): CanvasDocument {
   if (idCounts([...document.nodes, ...document.edges]).has(edge.id)) throw new Error(`id“${edge.id}”已存在`)
+  const nodeCounts = idCounts(document.nodes)
+  if ((nodeCounts.get(edge.fromNode) ?? 0) !== 1 || (nodeCounts.get(edge.toNode) ?? 0) !== 1) {
+    throw new Error('新连线的两个端点必须引用唯一存在的节点')
+  }
   return { ...document, edges: [...document.edges, cloneCanvasEdge(edge)] }
 }
 
@@ -282,8 +286,7 @@ function edgeEndpoints(entry: CanvasEdgeEntry): { fromNode: string; toNode: stri
 }
 
 export function copyCanvasSelection(document: CanvasDocument, nodeIds: ReadonlySet<string>): CanvasClipboardPayload {
-  const editable = editableNodeIndexes(document)
-  const selected = new Set(Array.from(nodeIds).filter((id) => editable.has(id)))
+  const selected = new Set(freezeCanvasMove(document, nodeIds).nodeIds)
   return {
     version: 1,
     nodes: document.nodes.filter((node) => isKnownCanvasNode(node) && selected.has(node.id)).map(cloneCanvasNode),

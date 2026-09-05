@@ -89,11 +89,16 @@
     return () => {
       disposed = true
       activeAgentRun = null
-      stopObserving?.()
+      const unsubscribe = stopObserving
       stopObserving = null
       if (agentTimer) clearTimeout(agentTimer)
-      if (editor) void editor.surface.destroy()
-      editor = null
+      if (editor) {
+        // The surface flushes its debounced local edit during destroy. Keep the
+        // observer and editor session alive for that final durable submission.
+        void editor.surface.destroy().catch(() => undefined).finally(() => unsubscribe?.())
+      } else {
+        unsubscribe?.()
+      }
     }
   })
 
@@ -186,7 +191,7 @@
       ids,
       readOnly: startsReadOnly,
       onBlockedStructuralEdit: () => {
-        notice = '请使用显式新增／删除命令；键盘拆分、合并和移动仍会 fail-closed。'
+        notice = '本次编辑会清空或跨越受控知识块；请保留块内内容、分别编辑，或使用右侧新增／删除。'
       },
       onResyncRequired: (reason) => {
         void handleResyncRequired(reason)
@@ -611,8 +616,8 @@
       <aside aria-label="协作活动与提案">
         <section class="actions">
           <h3>文档操作</h3>
-          <button onclick={insertAfterSelection} disabled={!editor || !session || saving || locked}>在选中块后新增段落</button>
-          <button onclick={deleteSelection} disabled={!editor || !session || saving || locked}>删除选中块</button>
+          <button onclick={insertAfterSelection} disabled={!editor || !session || locked}>在选中块后新增段落</button>
+          <button onclick={deleteSelection} disabled={!editor || !session || locked}>删除选中块</button>
           <label for="agent-instruction">给 Agent 的要求</label>
           <textarea id="agent-instruction" bind:value={agentInstruction} rows="3" disabled={agentBusy || locked}></textarea>
           <small class:agent-unavailable={!agentReadiness.ok}>{agentReadiness.ok ? `由 ${agentReadiness.label} 在 input-only 隔离中处理` : agentReadiness.message}</small>

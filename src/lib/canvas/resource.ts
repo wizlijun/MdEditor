@@ -37,7 +37,6 @@ export class CanvasResourceSession implements MediaResolver {
   private readonly budget: number
   private cache = new Map<string, CacheEntry>()
   private pending = new Map<string, Promise<string>>()
-  private requested = new Set<string>()
   private urls = new Set<string>()
   private cachedBytes = 0
   private disposed = false
@@ -65,8 +64,7 @@ export class CanvasResourceSession implements MediaResolver {
     }
     const current = this.pending.get(target)
     if (current) return current
-    if (this.requested.size >= 128) return ''
-    this.requested.add(target)
+    if (this.pending.size >= 128) return ''
     const request = this.readImage(target)
     this.pending.set(target, request)
     try {
@@ -91,7 +89,6 @@ export class CanvasResourceSession implements MediaResolver {
     this.urls.clear()
     this.cache.clear()
     this.pending.clear()
-    this.requested.clear()
     this.cachedBytes = 0
   }
 

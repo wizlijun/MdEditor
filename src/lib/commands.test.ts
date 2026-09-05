@@ -11,6 +11,7 @@ const exportCanvasCopy = vi.fn(async () => {})
 const isIOS = vi.fn(async () => false)
 const pickSaveCanvasFile = vi.fn(async () => '/tmp/copy.canvas')
 const confirmCanvasSaveAsReferences = vi.fn(async () => true)
+const toggleSideView = vi.fn(async () => {})
 
 vi.mock('./tabs.svelte', () => ({
   activeTab: () => tab,
@@ -40,7 +41,7 @@ vi.mock('./print', () => ({ printActiveTab: vi.fn() }))
 vi.mock('./sotvault.svelte', () => ({
   syncCurrentToVault: vi.fn(), deviceSourceForVaultPath: vi.fn(), revealVaultSource: vi.fn(),
 }))
-vi.mock('./side-panel/registry.svelte', () => ({ toggleSideView: vi.fn() }))
+vi.mock('./side-panel/registry.svelte', () => ({ toggleSideView }))
 vi.mock('./ui-state.svelte', () => ({ openSettings: vi.fn() }))
 
 beforeEach(() => {
@@ -68,5 +69,13 @@ describe('Canvas Save As command', () => {
 
     expect(saveAs).toHaveBeenCalledWith('canvas-tab', '/tmp/copy.canvas')
     expect(exportCanvasCopy).not.toHaveBeenCalled()
+  })
+})
+
+describe('Table of contents command', () => {
+  it('opens the registered table-of-contents side view', async () => {
+    const { dispatch } = await import('./commands')
+    await dispatch('toggle-table-of-contents')
+    expect(toggleSideView).toHaveBeenCalledWith('table-of-contents')
   })
 })

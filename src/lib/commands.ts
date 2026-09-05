@@ -92,6 +92,7 @@ export type CommandId =
   | 'view-sync-source'
   | 'toggle-folder-view'
   | 'toggle-sidecar-notes'
+  | 'toggle-table-of-contents'
   | 'toggle-git-history'
   | 'toggle-vault-search'
 
@@ -116,6 +117,7 @@ const handlers: Record<CommandId, () => void | Promise<void>> = {
   'view-sync-source': cmdViewSyncSource,
   'toggle-folder-view': () => toggleSideView('folder-view'),
   'toggle-sidecar-notes': () => toggleSideView('outline-notes'),
+  'toggle-table-of-contents': () => toggleSideView('table-of-contents'),
   'toggle-git-history': () => toggleSideView('git-history'),
   'toggle-vault-search': () => toggleSideView('vault-search'),
 }
