@@ -690,8 +690,8 @@ fn smart_search_window<R: tauri::Runtime>(
         WebviewUrl::App("smart-search.html".into()),
     )
     .title(menu_label(&locale, "smartSearch.title"))
-    .inner_size(680.0, 170.0)
-    .min_inner_size(560.0, 150.0)
+    .inner_size(1020.0, 700.0)
+    .min_inner_size(560.0, 420.0)
     .resizable(true)
     .decorations(true)
     // Quick-entry should accept its first click even when note.md was not the
@@ -2063,14 +2063,14 @@ fn menu_label(locale: &str, key: &str) -> String {
         "edit.findReplace" => ("Find and Replace…", "查找和替换…", "検索と置換…", "Suchen und Ersetzen…"),
         "view.toggleMode" => ("Toggle Source / Rich", "切换源码 / 富文本", "ソース / リッチを切り替え", "Quelltext / Rich umschalten"),
         "view.smartSearch" => (
-            "Smart Search & Answers…",
-            "智能搜索与问答…",
-            "スマート検索と回答…",
-            "Intelligente Suche und Antworten…",
+            "Smart Lookup…",
+            "智能查找…",
+            "スマート検索…",
+            "Intelligente Suche…",
         ),
         "smartSearch.title" => (
-            "Smart Search",
-            "智能搜索与问答",
+            "Smart Lookup",
+            "智能查找",
             "スマート検索",
             "Intelligente Suche",
         ),
@@ -2722,12 +2722,12 @@ mod menu_label_tests {
 
     #[test]
     fn smart_search_is_localized_in_every_locale() {
-        assert_eq!(menu_label("en", "view.smartSearch"), "Smart Search & Answers…");
-        assert_eq!(menu_label("zh", "view.smartSearch"), "智能搜索与问答…");
-        assert_eq!(menu_label("ja", "view.smartSearch"), "スマート検索と回答…");
+        assert_eq!(menu_label("en", "view.smartSearch"), "Smart Lookup…");
+        assert_eq!(menu_label("zh", "view.smartSearch"), "智能查找…");
+        assert_eq!(menu_label("ja", "view.smartSearch"), "スマート検索…");
         assert_eq!(
             menu_label("de", "view.smartSearch"),
-            "Intelligente Suche und Antworten…"
+            "Intelligente Suche…"
         );
     }
 
