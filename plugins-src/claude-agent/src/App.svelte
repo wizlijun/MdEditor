@@ -1,4 +1,5 @@
 <script lang="ts">
+  import '../../../src/styles/ui-foundation.css'
   import { bridge, request, onMessage } from './lib/bridge'
   import { t, type MessageKey } from './lib/strings'
   import { errorKey } from './lib/errors'
@@ -42,6 +43,7 @@
    *  the live stream, until you go back or start a new run. */
   let selectedRun: RunRecord | null = $state(null)
   let selectedLog = $state('')
+  let selectedLogLoading = $state(false)
   let settingsOpen = $state(false)
   let runUsageDisplay: UsageDisplay = $state('tip')
 
@@ -122,10 +124,15 @@
     settingsOpen = false
     selectedRun = run
     selectedLog = ''
+    selectedLogLoading = true
+    error = ''
     try {
-      selectedLog = (await request('history.log', { task: run.task, run_id: run.run_id })).log ?? ''
+      const result = await request('history.log', { task: run.task, run_id: run.run_id })
+      if (selectedRun?.run_id === run.run_id) selectedLog = result.log ?? ''
     } catch (e) {
-      error = message(e)
+      if (selectedRun?.run_id === run.run_id) error = message(e)
+    } finally {
+      if (selectedRun?.run_id === run.run_id) selectedLogLoading = false
     }
   }
 
@@ -194,7 +201,7 @@
   void loadHistory()
 </script>
 
-<main>
+<main class="ui-surface">
   <aside>
     <!-- One scrollport owns all variable-height sidebar content. Tasks can no
          longer squeeze the history scrollport to zero height. -->
@@ -207,7 +214,7 @@
           runs={history}
           label={tr}
           empty={tr('history.empty')}
-          selectedId={selectedRun?.run_id ?? null}
+          selectedId={settingsOpen ? null : selectedRun?.run_id ?? null}
           onselect={selectRun}
           ondelete={deleteRun}
           onclear={clearRuns}
@@ -220,7 +227,7 @@
       {/if}
       <TaskList
         {tasks}
-        selected={selectedTask}
+        selected={settingsOpen || selectedRun ? null : selectedTask}
         onselect={(id) => {
           selectedTask = id
           selectedRun = null
@@ -233,7 +240,8 @@
       type="button"
       class="settings-entry"
       class:active={settingsOpen}
-      aria-pressed={settingsOpen}
+      aria-current={settingsOpen ? 'page' : undefined}
+      aria-expanded={settingsOpen}
       onclick={() => (settingsOpen = !settingsOpen)}
     >
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -245,9 +253,11 @@
   </aside>
 
   <section>
+    {#if error}<p class="workspace-error" role="alert">{error}</p>{/if}
     {#if settingsOpen}
       <SettingsPage label={tr} />
     {:else if selectedRun}
+      {#if selectedLogLoading}<p class="loading-status" role="status">{tr('history.loading')}</p>{/if}
       <RunLog run={selectedRun} log={selectedLog} label={tr} />
     {:else}
       <header>
@@ -284,10 +294,8 @@
       {/if}
 
       <footer>
-        {#if error}
-          <span class="err">{error}</span>
-        {:else if view.status !== 'idle'}
-          <span class="st">{tr(('status.' + view.status) as MessageKey)}</span>
+        {#if view.status !== 'idle'}
+          <span class="st" role="status">{tr(('status.' + view.status) as MessageKey)}</span>
         {/if}
         {#if view.turns != null}
           <span class="turns">{tr('turns', { n: view.turns })}</span>
@@ -320,14 +328,14 @@
     color: CanvasText;
   }
   main {
-    --window-background: color-mix(in srgb, CanvasText 3%, Canvas);
-    --window-surface: Canvas;
+    --window-background: var(--ui-bg);
+    --window-surface: var(--ui-surface);
     --card-surface: color-mix(in srgb, CanvasText 2%, Canvas);
-    --hover-surface: color-mix(in srgb, CanvasText 5%, Canvas);
-    --window-border: color-mix(in srgb, CanvasText 11%, transparent);
-    --strong-border: color-mix(in srgb, CanvasText 18%, transparent);
-    --muted-text: color-mix(in srgb, CanvasText 58%, transparent);
-    --standard-accent: #3479db;
+    --hover-surface: var(--ui-hover);
+    --window-border: var(--ui-separator);
+    --strong-border: var(--ui-control-border);
+    --muted-text: var(--ui-secondary);
+    --standard-accent: var(--ui-accent);
     display: flex;
     height: 100vh;
     height: 100dvh;
@@ -335,7 +343,6 @@
     overflow: hidden;
     background: var(--window-background);
   }
-  @supports (color: AccentColor) { main { --standard-accent: AccentColor; } }
   aside {
     width: 264px;
     flex: none;
@@ -384,14 +391,14 @@
     display: flex;
     align-items: center;
     gap: 6px;
-    font-size: 10px;
+    font-size: 12px;
     letter-spacing: 0.075em;
     text-transform: uppercase;
-    color: color-mix(in srgb, CanvasText 46%, transparent);
+    color: var(--ui-secondary);
     margin: 16px 4px 7px;
     flex: none;
   }
-  .empty { margin: 8px 5px; font-size: 11px; color: var(--muted-text); }
+  .empty { margin: 8px 5px; font-size: 12px; color: var(--muted-text); }
   section {
     flex: 1;
     display: flex;
@@ -427,17 +434,17 @@
   }
   textarea:hover { border-color: var(--strong-border); }
   textarea:focus { outline: 2px solid color-mix(in srgb, var(--standard-accent) 30%, transparent); border-color: var(--standard-accent); }
-  .ctx { display: block; margin-top: 8px; font-size: 11px; color: var(--muted-text); }
+  .ctx { display: block; margin-top: 8px; font-size: 12px; color: var(--muted-text); }
   .will-run { margin: 0 0 8px; font-size: 12px; display: flex; gap: 6px; align-items: baseline; min-width: 0; }
   .will-run .lead { color: var(--muted-text); flex: none; }
-  .will-run .name { font-weight: 600; flex: none; }
+  .will-run .name { font-weight: 600; min-width: 0; overflow-wrap: anywhere; }
   .will-run .desc {
     color: var(--muted-text);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
-  .addendum { display: block; margin-bottom: 5px; font-size: 11px; color: var(--muted-text); }
+  .addendum { display: block; margin-bottom: 5px; font-size: 12px; color: var(--muted-text); }
   footer {
     display: flex;
     align-items: center;
@@ -468,12 +475,23 @@
   }
   footer button.primary:hover { filter: brightness(1.06); }
   footer button:disabled { opacity: 0.45; cursor: default; }
-  .err { color: #d9534f; font-size: 11px; }
-  .st, .turns { font-size: 11px; color: var(--muted-text); }
+  .workspace-error, .loading-status { flex: none; margin: 12px 16px 0; font-size: 13px; overflow-wrap: anywhere; }
+  .workspace-error { color: var(--ui-danger); }
+  .loading-status { color: var(--ui-secondary); }
+  .st, .turns { font-size: 12px; color: var(--muted-text); }
   :is(button, textarea):focus-visible { outline: 2px solid var(--standard-accent); outline-offset: 2px; }
   @media (max-width: 720px) {
     aside { width: 224px; }
     header { margin-inline: 12px; }
+  }
+  .will-run { flex-wrap: wrap; }
+  footer { flex-wrap: wrap; }
+  @media (max-width: 560px) {
+    main { flex-direction: column; overflow-y: auto; }
+    aside { width: 100%; max-height: 38vh; border-right: 0; border-bottom: 1px solid var(--window-border); }
+    section { flex: 1 0 360px; overflow: visible; }
+    header { margin-inline: 10px; }
+    footer { padding-inline: 10px; }
   }
   @media (max-height: 520px) {
     header { margin-top: 10px; padding: 10px 12px; }

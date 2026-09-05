@@ -144,9 +144,9 @@
     opacity: 0; transition: opacity 0.12s;
   }
   .card:hover .reject, .card:focus-within .reject, .reject:focus-visible { opacity: 0.5; }
-  .reject:hover { opacity: 1; color: #dc2626; }
+  .reject:hover { opacity: 1; color: var(--ui-danger); }
   .meta { display: flex; align-items: center; gap: 0.5rem; margin-top: 0.35rem; font-size: 0.78rem; opacity: 0.7; }
-  .due.overdue { color: #dc2626; opacity: 1; }
+  .due.overdue { color: var(--ui-danger); opacity: 1; }
   .trig { opacity: 1; }
   .endorse { opacity: 0.8; }
 </style>

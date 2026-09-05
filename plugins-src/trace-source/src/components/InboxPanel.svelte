@@ -315,7 +315,7 @@
     font-size: 0.75rem;
   }
   .mark.done { color: #16a34a; }
-  .mark.failed { color: #dc2626; }
+  .mark.failed { color: var(--ui-danger); }
   .age {
     flex: 0 0 auto;
     font-size: 0.68rem;

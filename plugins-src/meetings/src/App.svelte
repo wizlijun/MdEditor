@@ -1,4 +1,6 @@
 <script lang="ts">
+  import '../../../src/styles/ui-foundation.css'
+  import { modalFocus } from '../../../src/lib/ui/modal-focus'
   import { onMount } from 'svelte'
   import {
     bridge,
@@ -35,6 +37,9 @@
   } from './lib/types'
 
   type MigrationPhase = 'setup' | 'detecting' | 'planning' | 'preflight' | 'running' | 'result'
+
+  // The strings module is not reactive; seed it before the first render.
+  setLocale(bridge().locale)
 
   let vaultReady = $state<boolean | null>(null)
   let meetings = $state<MeetingSummary[]>([])
@@ -136,6 +141,7 @@
   }
 
   async function openMigration(): Promise<void> {
+    if (settingsSaving) return
     resetMigration()
     settingsOpen = false
     migrationOpen = true
@@ -338,7 +344,6 @@
   }
 
   onMount(() => {
-    setLocale(bridge().locale)
     bridge().onMessage((raw: unknown) => {
       const push = raw as Partial<MigrationProgressPush>
       if (push.type === 'hemory-migration' && typeof push.job_id === 'number' && push.event) {
@@ -360,7 +365,7 @@
   })
 </script>
 
-<main>
+<main class="ui-surface">
   <header class="topbar">
     <div>
       <h1>{t('title')}</h1>
@@ -368,9 +373,9 @@
     </div>
     {#if !migrationOpen}
       <div class="header-actions">
-        <button class="secondary" onclick={() => (settingsOpen = !settingsOpen)} disabled={!vaultReady}>{t('action.settings')}</button>
+        <button class="secondary" aria-expanded={settingsOpen} aria-controls="meetings-settings" onclick={() => (settingsOpen = !settingsOpen)} disabled={!vaultReady || settingsSaving}>{t('action.settings')}</button>
         <button class="secondary" onclick={refreshLibrary} disabled={!vaultReady || libraryLoading}>{t('action.refresh')}</button>
-        <button class="primary" onclick={() => void openMigration()} disabled={!vaultReady}>{t('action.migrate')}</button>
+        <button class="primary" onclick={() => void openMigration()} disabled={!vaultReady || settingsSaving}>{t('action.migrate')}</button>
       </div>
     {:else if phase !== 'running'}
       <button class="secondary" onclick={closeMigration}>{t('action.close')}</button>
@@ -519,15 +524,15 @@
     </section>
   {:else}
     {#if settingsOpen}
-      <section class="settings-panel" aria-label={t('settings.title')}>
+      <section id="meetings-settings" class="settings-panel" aria-label={t('settings.title')} aria-busy={settingsSaving}>
         <h2>{t('settings.title')}</h2>
         <label for="meetings-root">{t('settings.root')}</label>
-        <input id="meetings-root" type="text" bind:value={meetingsRoot} autocomplete="off" spellcheck="false" />
-        <p>{t('settings.rootHint')}</p>
-        <p>{t('settings.moveHint')}</p>
+        <input id="meetings-root" type="text" bind:value={meetingsRoot} aria-describedby="meetings-root-hint meetings-root-move-hint" disabled={settingsSaving} autocomplete="off" spellcheck="false" />
+        <p id="meetings-root-hint">{t('settings.rootHint')}</p>
+        <p id="meetings-root-move-hint">{t('settings.moveHint')}</p>
         {#if settingsError}<div class="banner error" role="alert">{settingsError}</div>{/if}
         <div class="settings-actions">
-          <button class="secondary" onclick={() => (settingsOpen = false)}>{t('action.close')}</button>
+          <button class="secondary" onclick={() => (settingsOpen = false)} disabled={settingsSaving}>{t('action.close')}</button>
           <button class="primary" onclick={saveSettings} disabled={settingsSaving}>{settingsSaving ? t('settings.saving') : t('settings.save')}</button>
         </div>
       </section>
@@ -538,7 +543,7 @@
       {:else if libraryError}
         <div class="empty-state error-text"><p>{libraryError}</p><button class="secondary" onclick={refreshLibrary}>{t('action.retry')}</button></div>
       {:else if meetings.length === 0}
-        <div class="empty-state"><div class="empty-icon" aria-hidden="true">⌁</div><h2>{t('library.empty')}</h2><p>{t('library.emptyHint', { root: meetingsRoot })}</p><button class="primary" onclick={() => void openMigration()}>{t('action.migrate')}</button></div>
+        <div class="empty-state"><div class="empty-icon" aria-hidden="true">⌁</div><h2>{t('library.empty')}</h2><p>{t('library.emptyHint', { root: meetingsRoot })}</p><button class="primary" onclick={() => void openMigration()} disabled={settingsSaving}>{t('action.migrate')}</button></div>
       {:else}
         <div class="meeting-list">
           {#each sortedMeetings as meeting (meeting.conversation_id)}
@@ -562,7 +567,7 @@
 
   {#if confirmOpen && report}
     <div class="sheet-backdrop" role="presentation" onclick={(event) => event.target === event.currentTarget && (confirmOpen = false)}>
-      <div class="confirm-sheet" role="dialog" aria-modal="true" aria-labelledby="confirm-title">
+      <div class="confirm-sheet" role="dialog" aria-modal="true" aria-labelledby="confirm-title" use:modalFocus={{ onClose: () => { confirmOpen = false } }}>
         <div class="confirm-mark" aria-hidden="true">⇢</div>
         <h2 id="confirm-title">{t('migration.confirmTitle')}</h2>
         <p>{t('migration.confirmBody')}</p>
@@ -576,52 +581,52 @@
 <style>
   :global(*) { box-sizing: border-box; }
   :global(html) { background: transparent; color-scheme: light dark; }
-  :global(body) { --topbar-border: rgba(0,0,0,.1); --topbar-background: rgba(250,250,252,.86); margin: 0; min-width: 560px; background: #f5f5f7; color: #1d1d1f; font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif; }
+  :global(body) { --topbar-border: rgba(0,0,0,.1); --topbar-background: rgba(250,250,252,.86); margin: 0; min-width: 0; background: #f5f5f7; color: #1d1d1f; font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif; }
   :global(button), :global(input), :global(select) { font: inherit; }
   button { cursor: default; }
   button:disabled { cursor: default; opacity: .45; }
   main { min-height: 100vh; }
-  .topbar { position: sticky; top: 0; z-index: 4; display: flex; align-items: center; justify-content: space-between; gap: 24px; padding: 22px 28px 18px; border-bottom: 1px solid var(--topbar-border); background: var(--topbar-background); backdrop-filter: blur(22px) saturate(160%); }
+  .topbar { position: sticky; top: 0; z-index: 4; display: flex; align-items: center; justify-content: space-between; gap: 24px; padding: 18px 24px; border-bottom: 1px solid var(--topbar-border); background: var(--topbar-background); backdrop-filter: blur(22px) saturate(160%); }
   h1, h2, h3, p { margin-top: 0; }
-  .topbar h1 { margin: 0; font-size: 26px; letter-spacing: -.035em; }
-  .topbar p { margin: 4px 0 0; color: #6e6e73; font-size: 13px; }
-  .header-actions, .report-actions, .confirm-actions, .setup-actions { display: flex; align-items: center; gap: 10px; }
+  .topbar h1 { margin: 0; font-size: 22px; letter-spacing: -.035em; }
+  .topbar p { overflow-wrap: anywhere; margin: 4px 0 0; color: var(--ui-secondary); font-size: 13px; }
+  .header-actions, .report-actions, .confirm-actions, .setup-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
   button.primary, button.secondary { min-height: 34px; padding: 7px 14px; border-radius: 9px; border: 1px solid transparent; font-weight: 600; }
-  button.primary { color: #fff; background: #007aff; }
+  button.primary { color: var(--ui-accent-foreground); background: var(--ui-accent); }
   button.primary:hover:not(:disabled) { background: #006ee6; }
   button.secondary { color: inherit; border-color: rgba(0,0,0,.16); background: rgba(255,255,255,.72); }
   button.secondary:hover:not(:disabled) { background: #fff; }
   .library, .migration-shell, .settings-panel { max-width: 1000px; margin: 0 auto; padding: 24px 28px 44px; }
-  .settings-panel { margin-top: 22px; padding: 20px; border: 1px solid rgba(0,0,0,.1); border-radius: 16px; background: rgba(255,255,255,.84); }
+  .settings-panel { margin-top: 22px; padding: 20px; border: 1px solid rgba(0,0,0,.1); border-radius: 12px; background: rgba(255,255,255,.84); }
   .settings-panel + .library { padding-top: 16px; }
   .settings-panel h2 { margin-bottom: 16px; font-size: 18px; }
   .settings-panel label { display: block; margin-bottom: 7px; font-weight: 650; font-size: 14px; }
   .settings-panel input { width: min(100%, 520px); }
-  .settings-panel > p { margin: 7px 0 0; color: #6e6e73; font-size: 12px; line-height: 1.45; }
+  .settings-panel > p { margin: 7px 0 0; color: var(--ui-secondary); font-size: 12px; line-height: 1.45; }
   .settings-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 18px; }
-  .empty-state { min-height: 430px; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; color: #6e6e73; }
+  .empty-state { min-height: min(320px, 55vh); display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; color: var(--ui-secondary); }
   .empty-state h2 { margin: 8px 0 6px; color: #1d1d1f; font-size: 18px; }
   .empty-state p { max-width: 480px; line-height: 1.5; }
-  .empty-icon { display: grid; place-items: center; width: 52px; height: 52px; border-radius: 15px; background: #e8e8ed; color: #007aff; font-size: 28px; }
+  .empty-icon { display: grid; place-items: center; width: 52px; height: 52px; border-radius: 15px; background: #e8e8ed; color: var(--ui-accent-text); font-size: 28px; }
   .meeting-list { display: grid; gap: 10px; }
   .meeting-row { display: flex; align-items: center; gap: 12px; padding: 5px 8px 5px 5px; border: 1px solid rgba(0,0,0,.1); border-radius: 13px; background: rgba(255,255,255,.82); box-shadow: 0 1px 2px rgba(0,0,0,.025); }
   .meeting-row:hover { border-color: rgba(0,122,255,.28); }
   .meeting-main { min-width: 0; flex: 1; display: grid; grid-template-columns: 160px minmax(180px, 1fr) auto; align-items: center; gap: 16px; padding: 13px; border: 0; text-align: left; color: inherit; background: transparent; }
   .meeting-main strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .meeting-date { color: #6e6e73; font-size: 13px; }
-  .meeting-meta { display: flex; gap: 12px; color: #6e6e73; font-size: 12px; white-space: nowrap; }
-  .open-button, .back-link { border: 0; color: #007aff; background: transparent; }
+  .meeting-date { color: var(--ui-secondary); font-size: 13px; }
+  .meeting-meta { display: flex; gap: 12px; color: var(--ui-secondary); font-size: 12px; white-space: nowrap; }
+  .open-button, .back-link { border: 0; color: var(--ui-accent-text); background: transparent; }
   .open-button { padding: 8px; font-size: 13px; }
   .back-link { padding: 0; margin-bottom: 14px; }
   .migration-heading h2 { margin-bottom: 5px; font-size: 22px; }
-  .migration-heading p { color: #6e6e73; font-size: 13px; }
-  .setup-card, .report-card, .running-card { margin-top: 18px; padding: 20px; border: 1px solid rgba(0,0,0,.1); border-radius: 16px; background: rgba(255,255,255,.84); box-shadow: 0 3px 18px rgba(0,0,0,.04); }
+  .migration-heading p { color: var(--ui-secondary); font-size: 13px; }
+  .setup-card, .report-card, .running-card { margin-top: 18px; padding: 20px; border: 1px solid rgba(0,0,0,.1); border-radius: 16px; background: rgba(255,255,255,.84); box-shadow: none; }
   .field-block { display: flex; align-items: center; justify-content: space-between; gap: 20px; }
   .field-block.compact { padding: 15px 0; border-top: 1px solid rgba(0,0,0,.08); }
   .field-copy label, .field-label, .timezone-field label, legend { display: block; margin-bottom: 4px; font-weight: 650; font-size: 14px; }
-  .field-copy p, .timezone-field p { margin: 0; color: #6e6e73; font-size: 12px; line-height: 1.4; }
+  .field-copy p, .timezone-field p { margin: 0; color: var(--ui-secondary); font-size: 12px; line-height: 1.4; }
   .selected-path { display: flex; align-items: center; gap: 8px; min-width: 0; margin-top: 12px; padding: 9px 11px; border-radius: 8px; background: rgba(0,0,0,.045); }
-  code { font-family: "SF Mono", ui-monospace, monospace; font-size: 11px; overflow-wrap: anywhere; }
+  code { font-family: "SF Mono", ui-monospace, monospace; font-size: 12px; overflow-wrap: anywhere; }
   select, input[type="text"] { min-height: 34px; padding: 6px 9px; border: 1px solid rgba(0,0,0,.18); border-radius: 8px; color: inherit; background: rgba(255,255,255,.82); }
   select { min-width: 210px; }
   .timezone-field { margin-top: 15px; padding-top: 15px; border-top: 1px solid rgba(0,0,0,.08); }
@@ -629,34 +634,34 @@
   .mode-field { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 18px 0 0; padding: 15px 0 0; border: 0; border-top: 1px solid rgba(0,0,0,.08); }
   .mode-field legend { float: left; width: 100%; margin-bottom: 10px; }
   .mode-field > label { display: flex; align-items: flex-start; gap: 9px; padding: 12px; border: 1px solid rgba(0,0,0,.12); border-radius: 10px; }
-  .mode-field > label.chosen { border-color: #007aff; box-shadow: 0 0 0 1px #007aff inset; background: rgba(0,122,255,.055); }
-  .mode-field input { margin-top: 2px; accent-color: #007aff; }
+  .mode-field > label.chosen { border-color: var(--ui-accent-text); box-shadow: 0 0 0 1px #007aff inset; background: rgba(0,122,255,.055); }
+  .mode-field input { margin-top: 2px; accent-color: var(--ui-accent-text); }
   .mode-field span { display: grid; gap: 3px; }
   .mode-field strong { font-size: 13px; }
-  .mode-field small { color: #6e6e73; line-height: 1.35; }
-  .busy-line { display: flex; align-items: center; justify-content: center; gap: 8px; margin: 18px 0 0; color: #6e6e73; font-size: 13px; }
-  .spinner { display: inline-block; width: 15px; height: 15px; border: 2px solid rgba(110,110,115,.25); border-top-color: #007aff; border-radius: 50%; animation: spin .75s linear infinite; }
+  .mode-field small { color: var(--ui-secondary); line-height: 1.35; }
+  .busy-line { display: flex; align-items: center; justify-content: center; gap: 8px; margin: 18px 0 0; color: var(--ui-secondary); font-size: 13px; }
+  .spinner { display: inline-block; width: 15px; height: 15px; border: 2px solid rgba(110,110,115,.25); border-top-color: var(--ui-accent-text); border-radius: 50%; animation: spin .75s linear infinite; }
   @keyframes spin { to { transform: rotate(360deg); } }
   .detected-row { display: flex; justify-content: space-between; margin-top: 14px; padding: 12px 0; border-top: 1px solid rgba(0,0,0,.08); font-size: 13px; }
-  .warnings { margin-top: 14px; color: #8a6300; font-size: 12px; }
+  .warnings { margin-top: 14px; color: var(--ui-warning); font-size: 12px; }
   .warnings summary, .item-row summary { cursor: default; }
   .warnings li, .banner li { margin: 4px 0; }
   .setup-actions { justify-content: flex-end; margin-top: 16px; }
   .banner { margin: 15px 0 0; padding: 10px 12px; border-radius: 9px; font-size: 12px; line-height: 1.4; }
   .banner ul { margin: 0; padding-left: 18px; }
-  .banner.error { color: #8f1616; background: rgba(255,59,48,.1); }
-  .banner.warning { color: #735600; background: rgba(255,204,0,.13); }
+  .banner.error { color: var(--ui-danger); background: rgba(255,59,48,.1); }
+  .banner.warning { color: var(--ui-warning); background: rgba(255,204,0,.13); }
   .report-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
   .report-heading h3 { margin-bottom: 4px; }
-  .report-heading p { margin: 0; color: #6e6e73; font-size: 12px; }
-  .mode-badge { padding: 4px 8px; border-radius: 999px; color: #5e5e63; background: rgba(0,0,0,.055); font-size: 11px; white-space: nowrap; }
+  .report-heading p { margin: 0; color: var(--ui-secondary); font-size: 12px; }
+  .mode-badge { padding: 4px 8px; border-radius: 999px; color: var(--ui-secondary); background: rgba(0,0,0,.055); font-size: 12px; white-space: nowrap; }
   .summary-grid { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; }
   .summary-grid > div { min-width: 84px; display: grid; gap: 2px; padding: 9px 10px; border-radius: 9px; background: rgba(0,0,0,.045); }
   .summary-grid strong { font-size: 18px; }
-  .summary-grid span { color: #6e6e73; font-size: 11px; }
-  .summary-grid .positive strong, .action-label.positive { color: #16833b; }
-  .summary-grid .warning strong, .action-label.warning { color: #9a6d00; }
-  .summary-grid .danger strong, .action-label.danger { color: #d1261c; }
+  .summary-grid span { color: var(--ui-secondary); font-size: 12px; }
+  .summary-grid .positive strong, .action-label.positive { color: var(--ui-success); }
+  .summary-grid .warning strong, .action-label.warning { color: var(--ui-warning); }
+  .summary-grid .danger strong, .action-label.danger { color: var(--ui-danger); }
   .item-list { max-height: 300px; overflow: auto; margin-top: 16px; border: 1px solid rgba(0,0,0,.09); border-radius: 10px; }
   .item-row { border-bottom: 1px solid rgba(0,0,0,.075); }
   .item-row:last-child { border-bottom: 0; }
@@ -665,46 +670,59 @@
   .action-dot { width: 7px; height: 7px; border-radius: 50%; background: #8e8e93; }
   .action-dot.positive { background: #34c759; } .action-dot.warning { background: #ff9f0a; } .action-dot.danger { background: #ff3b30; }
   .action-label { font-weight: 650; }
-  .item-path { overflow: hidden; color: #6e6e73; text-overflow: ellipsis; white-space: nowrap; }
+  .item-path { overflow: hidden; color: var(--ui-secondary); text-overflow: ellipsis; white-space: nowrap; }
   .item-row dl { margin: 0; padding: 0 12px 11px 29px; }
   .item-row dl div { display: grid; grid-template-columns: 72px 1fr; gap: 8px; margin-top: 5px; }
-  .item-row dt { color: #6e6e73; } .item-row dd { margin: 0; min-width: 0; }
+  .item-row dt { color: var(--ui-secondary); } .item-row dd { margin: 0; min-width: 0; }
   .report-actions { justify-content: flex-end; margin-top: 16px; }
-  .report-actions p { margin: 0 auto 0 0; color: #6e6e73; font-size: 12px; }
+  .report-actions p { margin: 0 auto 0 0; color: var(--ui-secondary); font-size: 12px; }
   .running-card { min-height: 340px; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; }
   .running-card h3 { margin: 14px 0 6px; }
-  .running-card p { color: #6e6e73; }
+  .running-card p { color: var(--ui-secondary); }
   .running-card code { margin-bottom: 20px; }
   .running-icon { width: 50px; height: 50px; display: grid; place-items: center; border-radius: 15px; background: rgba(0,122,255,.1); }
-  .running-icon span { width: 20px; height: 20px; border: 2px solid rgba(0,122,255,.25); border-top-color: #007aff; border-radius: 50%; animation: spin .8s linear infinite; }
+  .running-icon span { width: 20px; height: 20px; border: 2px solid rgba(0,122,255,.25); border-top-color: var(--ui-accent-text); border-radius: 50%; animation: spin .8s linear infinite; }
   .progress-track { width: min(460px, 85%); height: 7px; overflow: hidden; margin: 0 0 12px; border-radius: 99px; background: rgba(0,0,0,.08); }
-  .progress-track span { display: block; height: 100%; border-radius: inherit; background: #007aff; transition: width .2s ease; }
+  .progress-track span { display: block; height: 100%; border-radius: inherit; background: var(--ui-accent); transition: width .2s ease; }
   .sheet-backdrop { position: fixed; inset: 0; z-index: 20; display: grid; place-items: center; padding: 24px; background: rgba(0,0,0,.28); backdrop-filter: blur(5px); }
-  .confirm-sheet { width: min(440px, 100%); padding: 24px; border: 1px solid rgba(0,0,0,.12); border-radius: 18px; text-align: center; background: #fff; box-shadow: 0 22px 80px rgba(0,0,0,.22); }
-  .confirm-mark { display: grid; place-items: center; width: 46px; height: 46px; margin: 0 auto 14px; border-radius: 50%; color: #007aff; background: rgba(0,122,255,.1); font-size: 25px; }
+  .confirm-sheet { max-height: calc(100dvh - 48px); overflow: auto; width: min(440px, 100%); padding: 24px; border: 1px solid rgba(0,0,0,.12); border-radius: 18px; text-align: center; background: #fff; box-shadow: 0 22px 80px rgba(0,0,0,.22); }
+  .confirm-mark { display: grid; place-items: center; width: 46px; height: 46px; margin: 0 auto 14px; border-radius: 50%; color: var(--ui-accent-text); background: rgba(0,122,255,.1); font-size: 25px; }
   .confirm-sheet h2 { margin-bottom: 8px; font-size: 20px; }
-  .confirm-sheet > p { color: #6e6e73; font-size: 13px; line-height: 1.45; }
+  .confirm-sheet > p { color: var(--ui-secondary); font-size: 13px; line-height: 1.45; }
   .confirm-counts { display: flex; justify-content: center; gap: 18px; margin: 18px 0; font-size: 13px; }
   .confirm-actions { justify-content: flex-end; }
-  .error-text { color: #d1261c; }
+  .error-text { color: var(--ui-danger); }
   @media (max-width: 760px) {
     .meeting-main { grid-template-columns: 1fr; gap: 5px; }
     .meeting-meta { flex-wrap: wrap; }
     .mode-field { grid-template-columns: 1fr; }
     .topbar { align-items: flex-start; }
   }
+  @media (max-width: 560px) {
+    .topbar { position: static; flex-wrap: wrap; gap: 14px; padding: 16px; }
+    .header-actions { width: 100%; }
+    .library, .migration-shell { padding: 18px 16px 28px; }
+    .settings-panel { margin: 16px; padding: 16px; }
+    .field-block, .report-heading { flex-wrap: wrap; gap: 12px; }
+    .field-copy { min-width: 0; }
+    select { min-width: 0; max-width: 100%; }
+    .selected-path code { min-width: 0; }
+    .item-row summary { grid-template-columns: 8px minmax(0, 1fr); }
+    .item-row summary .action-label, .item-path { grid-column: 2; }
+    .item-row summary strong { overflow-wrap: anywhere; }
+  }
   @media (prefers-color-scheme: dark) {
     :global(body) { --topbar-border: rgba(255,255,255,.11); --topbar-background: rgba(34,34,36,.86); color: #f5f5f7; background: #1c1c1e; }
-    .topbar p, .migration-heading p, .field-copy p, .timezone-field p, .meeting-date, .meeting-meta, .report-heading p, .report-actions p, .running-card p, .confirm-sheet > p, .item-path, .item-row dt, .summary-grid span { color: #a1a1a6; }
+    .topbar p, .migration-heading p, .field-copy p, .timezone-field p, .meeting-date, .meeting-meta, .report-heading p, .report-actions p, .running-card p, .confirm-sheet > p, .item-path, .item-row dt, .summary-grid span { color: var(--ui-secondary); }
     .empty-state h2 { color: #f5f5f7; }
     .meeting-row, .setup-card, .report-card, .running-card, .settings-panel { border-color: rgba(255,255,255,.11); background: rgba(44,44,46,.84); }
-    .settings-panel > p { color: #a1a1a6; }
+    .settings-panel > p { color: var(--ui-secondary); }
     button.secondary, select, input[type="text"] { border-color: rgba(255,255,255,.16); background: rgba(58,58,60,.8); }
     button.secondary:hover:not(:disabled) { background: #48484a; }
     .selected-path, .summary-grid > div, .mode-badge { background: rgba(255,255,255,.065); }
     .field-block.compact, .timezone-field, .mode-field, .detected-row, .item-row { border-color: rgba(255,255,255,.09); }
     .mode-field > label { border-color: rgba(255,255,255,.13); }
-    .mode-field > label.chosen { border-color: #0a84ff; background: rgba(10,132,255,.1); }
+    .mode-field > label.chosen { border-color: var(--ui-accent-text); background: rgba(10,132,255,.1); }
     .item-list { border-color: rgba(255,255,255,.1); }
     .progress-track { background: rgba(255,255,255,.1); }
     .confirm-sheet { border-color: rgba(255,255,255,.13); background: #2c2c2e; }

@@ -57,7 +57,11 @@
     }
   }
 
-  onMount(() => cancelEl?.focus())
+  onMount(() => {
+    const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null
+    cancelEl?.focus()
+    return () => { queueMicrotask(() => { if (previous?.isConnected) previous.focus() }) }
+  })
 </script>
 
 <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->

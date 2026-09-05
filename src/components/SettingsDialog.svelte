@@ -2,7 +2,8 @@
   import { invoke } from '@tauri-apps/api/core'
   import { onMount } from 'svelte'
   import { ask, open as openFilePicker } from '@tauri-apps/plugin-dialog'
-  import { settings, saveSettings, getPluginScopedAll, setPluginScopedValue, pluginScopedVersion } from '../lib/settings.svelte'
+  import { settings, saveSettings as persistSettings, getPluginScopedAll, setPluginScopedValue, pluginScopedVersion } from '../lib/settings.svelte'
+  import { modalFocus } from '../lib/ui/modal-focus'
   import { i18n, setLocale, availableLocales, t, type Locale } from '../lib/i18n/store.svelte'
   import type { Messages } from '../lib/i18n/en'
   import { pluginTabLabel, pluginFieldLabel } from '../lib/plugins/plugin-i18n'
@@ -57,6 +58,55 @@
 
   let pluginTabs = $state<SettingsTab[]>([])
   let selectedTab = $state<'core' | string>('core')
+  let contentPane = $state<HTMLDivElement | null>(null)
+  let settingsSaveBusy = $state(0)
+  let settingsSaveErrors = $state<Record<string, string>>({})
+  const settingRetries = new Map<string, () => Promise<boolean>>()
+  let localeSaveError = $state<string | null>(null)
+  let pluginSaveErrors = $state<Record<string, string>>({})
+  let vaultBusy = $state(false)
+  const selectedTabLabel = $derived.by(() => {
+    const coreLabels: Record<string, keyof Messages> = {
+      core: 'settings.tab.core', block: 'settings.tab.block', cli: 'settings.tab.cli',
+      updates: 'settings.tab.updates', vault: 'settings.tab.vault', search: 'settings.tab.search',
+      'outline-notes': 'settings.tab.outline',
+    }
+    const plugin = pluginTabs.find((tab) => tab.pluginId === selectedTab)
+    return coreLabels[selectedTab] ? t(coreLabels[selectedTab])
+      : plugin ? pluginTabLabel(plugin.manifest, plugin.label) : t('settings.title')
+  })
+  $effect(() => {
+    void selectedTab
+    if (contentPane) contentPane.scrollTop = 0
+  })
+
+  async function saveSettings(task = 'settings', activate?: () => Promise<void>): Promise<boolean> {
+    settingsSaveBusy++
+    try {
+      await persistSettings()
+      await activate?.()
+      delete settingsSaveErrors[task]
+      settingRetries.delete(task)
+      return true
+    } catch (error) {
+      settingsSaveErrors[task] = t('vaultSync.saveFailed', { error: String(error) })
+      settingRetries.set(task, () => saveSettings(task, activate))
+      return false
+    } finally { settingsSaveBusy-- }
+  }
+  async function onLocaleChange(locale: Locale): Promise<void> {
+    settingsSaveBusy++
+    try { await setLocale(locale); localeSaveError = null }
+    catch (error) { localeSaveError = t('vaultSync.saveFailed', { error: String(error) }) }
+    finally { settingsSaveBusy-- }
+  }
+
+  function canClose(): boolean {
+    return !importReport && !importBusy && !busy && !cliBusy && !gitProxyBusy
+      && !syncDirBusy && !thresholdBusy && !searchExcludeDirsBusy && !searchThresholdBusy
+      && !globSaveBusy && !weightsBusy && !vaultBusy && settingsSaveBusy === 0
+  }
+  function closeDialog(): void { if (canClose()) open = false }
   let pluginValues = $state<Record<string, Record<string, unknown>>>({})
   let smartLookupAgents = $state<AgentOption[]>([])
   let smartLookupPlannerAgents = $derived(smartLookupAgents.filter(supportsSearchPlanner))
@@ -768,7 +818,13 @@
 
   async function savePluginField(pluginId: string, key: string, value: unknown) {
     pluginValues[pluginId] = { ...(pluginValues[pluginId] ?? {}), [key]: value }
-    await setPluginScopedValue(pluginId, key, value)
+    settingsSaveBusy++
+    try {
+      await setPluginScopedValue(pluginId, key, value)
+      delete pluginSaveErrors[`${pluginId}.${key}`]
+    } catch (error) {
+      pluginSaveErrors[`${pluginId}.${key}`] = t('vaultSync.saveFailed', { error: String(error) })
+    } finally { settingsSaveBusy-- }
   }
 
   async function savePluginNumberField(pluginId: string, key: string, input: HTMLInputElement) {
@@ -917,17 +973,17 @@
   }
 
   async function handleImportTheme() {
-    const selection = await openFilePicker({
-      multiple: false,
-      directory: false,
-      filters: [{ name: 'Typora theme zip', extensions: ['zip'] }],
-    })
-    if (!selection || Array.isArray(selection)) return
-    importBusy = true
     try {
+      const selection = await openFilePicker({
+        multiple: false,
+        directory: false,
+        filters: [{ name: 'Typora theme zip', extensions: ['zip'] }],
+      })
+      if (!selection || Array.isArray(selection)) return
+      importBusy = true
       importReport = await invoke('theme_import', { zipPath: selection })
     } catch (e) {
-      console.warn('[Settings] theme_import:', e)
+      pushToast({ level: 'error', message: t('settings.importTypora'), detail: String(e) })
       importReport = { themes: [], asset_dirs: [], errors: [{ file: '?', message: String(e) }], staging_dir: '' }
     } finally {
       importBusy = false
@@ -936,7 +992,7 @@
 
   async function handleRevealThemes() {
     try { await invoke('theme_reveal') }
-    catch (e) { console.warn('[Settings] theme_reveal:', e) }
+    catch (e) { pushToast({ level: 'error', message: t('settings.revealThemes'), detail: String(e) }) }
   }
 
   async function handleReloadThemes() {
@@ -945,7 +1001,7 @@
 
   async function handleRestoreBuiltins() {
     try { await invoke('theme_restore_builtins') }
-    catch (e) { console.warn('[Settings] theme_restore_builtins:', e) }
+    catch (e) { pushToast({ level: 'error', message: t('settings.restoreBuiltins'), detail: String(e) }) }
     await reloadThemes()
   }
 
@@ -985,21 +1041,25 @@
   <div
     class="overlay"
     role="presentation"
-    onclick={() => (open = false)}
-    onkeydown={(e) => e.key === 'Escape' && (open = false)}
+    onclick={(event) => { if (event.target === event.currentTarget) closeDialog() }}
   >
-    <div class="dialog" role="dialog" aria-modal="true" onclick={(e) => e.stopPropagation()}>
-      <h2>{t('settings.title')}</h2>
+    <div class="dialog ui-surface" role="dialog" aria-modal="true" aria-labelledby="settings-dialog-title" tabindex="-1"
+      use:modalFocus={{ onClose: closeDialog, canClose }}>
+      <header class="dialog-header">
+        <h2 id="settings-dialog-title">{t('settings.title')}</h2>
+        <span class="current-page">{selectedTabLabel}</span>
+      </header>
 
-      <nav class="tab-strip">
-        <button class:active={selectedTab === 'core'} onclick={() => selectedTab = 'core'}>{t('settings.tab.core')}</button>
-        <button class:active={selectedTab === 'block'} onclick={() => selectedTab = 'block'}>{t('settings.tab.block')}</button>
+      <div class="settings-layout">
+      <nav class="tab-strip" aria-label={t('settings.title')}>
+        <button aria-current={selectedTab === 'core' ? 'page' : undefined} data-initial-focus={selectedTab === 'core' ? '' : undefined} class:active={selectedTab === 'core'} onclick={() => selectedTab = 'core'}>{t('settings.tab.core')}</button>
+        <button aria-current={selectedTab === 'block' ? 'page' : undefined} data-initial-focus={selectedTab === 'block' ? '' : undefined} class:active={selectedTab === 'block'} onclick={() => selectedTab = 'block'}>{t('settings.tab.block')}</button>
         {#if !isIOSPlatform}
-          <button class:active={selectedTab === 'cli'} onclick={() => { selectedTab = 'cli'; void refreshCliStatus() }}>{t('settings.tab.cli')}</button>
-          <button class:active={selectedTab === 'updates'} onclick={() => { selectedTab = 'updates' }}>{t('settings.tab.updates')}</button>
+          <button aria-current={selectedTab === 'cli' ? 'page' : undefined} data-initial-focus={selectedTab === 'cli' ? '' : undefined} class:active={selectedTab === 'cli'} onclick={() => { selectedTab = 'cli'; void refreshCliStatus() }}>{t('settings.tab.cli')}</button>
+          <button aria-current={selectedTab === 'updates' ? 'page' : undefined} data-initial-focus={selectedTab === 'updates' ? '' : undefined} class:active={selectedTab === 'updates'} onclick={() => { selectedTab = 'updates' }}>{t('settings.tab.updates')}</button>
         {/if}
         {#if isIOSPlatform}
-          <button class:active={selectedTab === 'vault'} onclick={() => selectedTab = 'vault'}>{t('settings.tab.vault')}</button>
+          <button aria-current={selectedTab === 'vault' ? 'page' : undefined} data-initial-focus={selectedTab === 'vault' ? '' : undefined} class:active={selectedTab === 'vault'} onclick={() => selectedTab = 'vault'}>{t('settings.tab.vault')}</button>
         {/if}
         {#if !isIOSPlatform}
           <!-- iOS registers no search commands at all (see the `#[cfg(not(
@@ -1009,26 +1069,33 @@
                button that errors on click. Gated like CLI/Updates above.
                Data loading lives in the `selectedTab === 'search'` $effect,
                not here — see its comment for why. -->
-          <button class:active={selectedTab === 'search'} onclick={() => selectedTab = 'search'}>
+          <button aria-current={selectedTab === 'search' ? 'page' : undefined} data-initial-focus={selectedTab === 'search' ? '' : undefined} class:active={selectedTab === 'search'} onclick={() => selectedTab = 'search'}>
             {t('settings.tab.search')}
           </button>
         {/if}
-        <button class:active={selectedTab === 'outline-notes'} onclick={() => selectedTab = 'outline-notes'}>{t('settings.tab.outline')}</button>
+        <button aria-current={selectedTab === 'outline-notes' ? 'page' : undefined} data-initial-focus={selectedTab === 'outline-notes' ? '' : undefined} class:active={selectedTab === 'outline-notes'} onclick={() => selectedTab = 'outline-notes'}>{t('settings.tab.outline')}</button>
         {#each pluginTabs as ptab (ptab.pluginId)}
-          <button class:active={selectedTab === ptab.pluginId} onclick={() => selectedTab = ptab.pluginId}>{pluginTabLabel(ptab.manifest, ptab.label)}</button>
+          <button aria-current={selectedTab === ptab.pluginId ? 'page' : undefined} data-initial-focus={selectedTab === ptab.pluginId ? '' : undefined} class:active={selectedTab === ptab.pluginId} onclick={() => selectedTab = ptab.pluginId}>{pluginTabLabel(ptab.manifest, ptab.label)}</button>
         {/each}
       </nav>
 
+      <div class="settings-content" role="region" aria-label={selectedTabLabel} tabindex="-1" bind:this={contentPane}>
       {#if selectedTab === 'core'}
         <section class="block">
           <label class="row">
             <span class="lbl">{t('settings.language')}</span>
-            <select value={i18n.locale} onchange={(e) => setLocale((e.currentTarget as HTMLSelectElement).value as Locale)}>
+            <select value={i18n.locale} onchange={(e) => onLocaleChange((e.currentTarget as HTMLSelectElement).value as Locale)}>
               {#each availableLocales as loc (loc.code)}
                 <option value={loc.code}>{loc.label}</option>
               {/each}
             </select>
           </label>
+          {#if localeSaveError}
+            <div class="field-save-error" role="alert">
+              <p class="result fail">{localeSaveError}</p>
+              <button onclick={() => onLocaleChange(i18n.locale)} disabled={settingsSaveBusy > 0}>{t('vaultSync.save')}</button>
+            </div>
+          {/if}
         </section>
 
         <section class="block">
@@ -1087,13 +1154,7 @@
               <input
                 type="checkbox"
                 bind:checked={settings.dailyNotes.enabled}
-                onchange={async () => {
-                  await saveSettings()
-                  try {
-                    const { invoke } = await import('@tauri-apps/api/core')
-                    await invoke('set_daily_notes_enabled', { enabled: settings.dailyNotes.enabled })
-                  } catch (e) { console.warn('[settings] set_daily_notes_enabled:', e) }
-                }}
+                onchange={() => saveSettings('dailyNotes', () => invoke('set_daily_notes_enabled', { enabled: settings.dailyNotes.enabled }))}
               />
               {t('settings.dailyNotes.label')}
             </label>
@@ -1101,12 +1162,7 @@
               <input
                 type="checkbox"
                 bind:checked={settings.mcpServer.enabled}
-                onchange={async () => {
-                  await saveSettings()
-                  try {
-                    await invoke('set_mcp_enabled', { enabled: settings.mcpServer.enabled })
-                  } catch (e) { console.warn('[settings] set_mcp_enabled:', e) }
-                }}
+                onchange={() => saveSettings('mcpServer', () => invoke('set_mcp_enabled', { enabled: settings.mcpServer.enabled }))}
               />
               {t('settings.mcp.enable')}
             </label>
@@ -1124,23 +1180,23 @@
             <input type="text" readonly
               value={vaultSettings.vaultPath ?? t('vaultSync.notConfigured')} />
           </label>
-          <label class="row">
-            <span class="lbl">{t('vaultSync.relPath')}</span>
-            <input type="text" bind:value={syncDirDraft}
+          <div class="row">
+            <label class="lbl" for="settings-sync-dir">{t('vaultSync.relPath')}</label>
+            <input id="settings-sync-dir" type="text" bind:value={syncDirDraft}
               placeholder={DEFAULT_SYNC_DIR}
               disabled={!vaultSettings.vaultPath || syncDirBusy} />
             <button onclick={onSaveSyncDir}
               disabled={!vaultSettings.vaultPath || syncDirBusy}>{t('vaultSync.save')}</button>
-          </label>
-          <label class="row">
-            <span class="lbl">{t('vaultSync.largeFileThreshold')}</span>
-            <input type="number" min="1" step="1" bind:value={thresholdDraft}
+          </div>
+          <div class="row">
+            <label class="lbl" for="settings-file-threshold">{t('vaultSync.largeFileThreshold')}</label>
+            <input id="settings-file-threshold" type="number" min="1" step="1" bind:value={thresholdDraft}
               disabled={!vaultSettings.vaultPath || thresholdBusy} />
             <button onclick={onSaveThreshold}
               disabled={!vaultSettings.vaultPath || thresholdBusy}>{t('vaultSync.save')}</button>
-          </label>
+          </div>
           {#if agentsSectionMissing}
-            <label class="row" style="align-items: flex-start;">
+            <div class="row" style="align-items: flex-start;">
               <span class="lbl"></span>
               <div style="flex: 1; display: flex; flex-direction: column; gap: 4px;">
                 <p class="desc" style="margin: 0;">{t('search.agentsHint')}</p>
@@ -1148,7 +1204,7 @@
                   style="align-self: flex-start;"
                   disabled={agentsSectionBusy}>{t('search.agentsAdd')}</button>
               </div>
-            </label>
+            </div>
           {/if}
         </section>
 
@@ -1187,6 +1243,7 @@
             <div class="row" style="gap: 8px;">
               <input
                 id="git-proxy"
+                aria-label={t('settings.proxy.title')}
                 type="text"
                 style="flex: 1;"
                 placeholder="http://127.0.0.1:1080"
@@ -1380,7 +1437,7 @@
           </p>
         </section>
       {:else if selectedTab === 'vault' && isIOSPlatform}
-        <VaultSettingsTab />
+        <VaultSettingsTab onBusyChange={(value) => vaultBusy = value} />
       {:else if selectedTab === 'search'}
         <section class="block">
           <h3>{t('smartSearch.windowTitle')}</h3>
@@ -1636,31 +1693,31 @@
         {#if sotvaultStore.vaultRoot}
           <section class="block">
             <h3>{t('search.index.settingsHeading')}</h3>
-            <label class="row" style="align-items: flex-start;">
-              <span class="lbl">{t('settings.searchExcludeDirs')}</span>
+            <div class="row" style="align-items: flex-start;">
+              <label class="lbl" for="settings-search-excludes">{t('settings.searchExcludeDirs')}</label>
               <div style="flex: 1; display: flex; flex-direction: column; gap: 4px;">
-                <textarea rows="3" bind:value={searchExcludeDirsDraft}
+                <textarea id="settings-search-excludes" aria-describedby="settings-search-excludes-hint" rows="3" bind:value={searchExcludeDirsDraft}
                   disabled={!vaultSettings.vaultPath || searchExcludeDirsBusy}
                   style="width: 100%; font: inherit; padding: 6px; border-radius: 4px; border: 1px solid color-mix(in srgb, CanvasText 25%, transparent); background: Canvas; color: CanvasText; resize: vertical;"
                 ></textarea>
-                <p class="desc" style="margin: 0;">{t('settings.searchExcludeDirsHint')}</p>
+                <p id="settings-search-excludes-hint" class="desc" style="margin: 0;">{t('settings.searchExcludeDirsHint')}</p>
                 <button onclick={onSaveSearchExcludeDirs}
                   style="align-self: flex-start;"
                   disabled={!vaultSettings.vaultPath || searchExcludeDirsBusy}>{t('vaultSync.save')}</button>
               </div>
-            </label>
-            <label class="row" style="align-items: flex-start;">
-              <span class="lbl">{t('search.index.thresholdLabel')}</span>
+            </div>
+            <div class="row" style="align-items: flex-start;">
+              <label class="lbl" for="settings-search-threshold">{t('search.index.thresholdLabel')}</label>
               <div style="flex: 1; display: flex; flex-direction: column; gap: 4px;">
                 <div class="row" style="gap: 8px;">
-                  <input type="number" min="1" step="1" bind:value={searchThresholdDraft}
+                  <input id="settings-search-threshold" aria-describedby="settings-search-threshold-hint" type="number" min="1" step="1" bind:value={searchThresholdDraft}
                     disabled={!vaultSettings.vaultPath || searchThresholdBusy} />
                   <button onclick={onSaveSearchThreshold}
                     disabled={!vaultSettings.vaultPath || searchThresholdBusy}>{t('vaultSync.save')}</button>
                 </div>
-                <p class="desc" style="margin: 0;">{t('search.index.thresholdHint')}</p>
+                <p id="settings-search-threshold-hint" class="desc" style="margin: 0;">{t('search.index.thresholdHint')}</p>
               </div>
-            </label>
+            </div>
           </section>
           <section class="block">
             <h3>{t('search.index.globsHeading')}</h3>
@@ -1681,6 +1738,7 @@
             {#each globRows as row, i (i)}
               <div class="row glob-row" style="gap: 8px; margin-bottom: 4px;">
                 <input type="text" style="flex: 1;" value={row.pattern}
+                  aria-label={`${t('search.index.globsHeading')} ${i + 1}`}
                   oninput={(e) => onGlobRowInput(i, e.currentTarget.value)}
                   onblur={() => onGlobRowBlur(i)}
                   placeholder={t('search.index.globsPatternPlaceholder')}
@@ -1708,6 +1766,7 @@
             <h3 style="margin-top: 16px;">{t('search.index.globsSampleHeading')}</h3>
             <div class="row" style="gap: 8px;">
               <input type="text" style="flex: 1;" bind:value={globSampleDraft}
+                aria-label={t('search.index.globsSampleHeading')}
                 placeholder={t('search.index.globsSamplePlaceholder')} />
               <button onclick={onGenerateGlobCandidates} disabled={!globSampleDraft.trim()}>{t('search.index.globsSampleGenerate')}</button>
             </div>
@@ -1730,20 +1789,20 @@
             <h3>{t('search.weights.heading')}</h3>
             <p class="desc">{t('search.weights.hint')}</p>
             <div class="row">
-              <span class="lbl">{t('search.group.human')}</span>
-              <input type="number" min="0.01" max="5" step="0.05" bind:value={weightsDraft.human} oninput={() => (weightsError = null)} disabled={weightsBusy} />
+              <label class="lbl" for="search-weight-human">{t('search.group.human')}</label>
+              <input id="search-weight-human" type="number" min="0.01" max="5" step="0.05" bind:value={weightsDraft.human} oninput={() => (weightsError = null)} disabled={weightsBusy} />
             </div>
             <div class="row">
-              <span class="lbl">{t('search.index.tiersDerivedLabel')}</span>
-              <input type="number" min="0.01" max="5" step="0.05" bind:value={weightsDraft.derived} oninput={() => (weightsError = null)} disabled={weightsBusy} />
+              <label class="lbl" for="search-weight-derived">{t('search.index.tiersDerivedLabel')}</label>
+              <input id="search-weight-derived" type="number" min="0.01" max="5" step="0.05" bind:value={weightsDraft.derived} oninput={() => (weightsError = null)} disabled={weightsBusy} />
             </div>
             <div class="row">
-              <span class="lbl">{t('search.group.source')}</span>
-              <input type="number" min="0.01" max="5" step="0.05" bind:value={weightsDraft.source} oninput={() => (weightsError = null)} disabled={weightsBusy} />
+              <label class="lbl" for="search-weight-source">{t('search.group.source')}</label>
+              <input id="search-weight-source" type="number" min="0.01" max="5" step="0.05" bind:value={weightsDraft.source} oninput={() => (weightsError = null)} disabled={weightsBusy} />
             </div>
             <div class="row">
-              <span class="lbl">{t('search.group.unlabeled')}</span>
-              <input type="number" min="0.01" max="5" step="0.05" bind:value={weightsDraft.unlabeled} oninput={() => (weightsError = null)} disabled={weightsBusy} />
+              <label class="lbl" for="search-weight-unlabeled">{t('search.group.unlabeled')}</label>
+              <input id="search-weight-unlabeled" type="number" min="0.01" max="5" step="0.05" bind:value={weightsDraft.unlabeled} oninput={() => (weightsError = null)} disabled={weightsBusy} />
             </div>
             <div class="row" style="gap: 8px; margin-top: 8px;">
               <button onclick={onResetWeightsDraft} disabled={weightsBusy}>{t('search.weights.resetDefault')}</button>
@@ -1777,6 +1836,7 @@
               <span class="shortcut-label">{t(OUTLINE_CMD_LABELS[id as OutlineCommandId])}</span>
               <button
                 class="shortcut-input" class:recording={recording === id}
+                aria-label={`${t(OUTLINE_CMD_LABELS[id as OutlineCommandId])}: ${recording === id ? t('outline.pressKeys') : displayShortcut(resolvedOutline[id as OutlineCommandId], isMac)}`}
                 onclick={() => (recording = id as OutlineCommandId)}
                 onkeydown={(e) => recording === id && onRecordKey(e, id as OutlineCommandId)}
                 onblur={() => { if (recording === id) recording = null }}
@@ -1784,7 +1844,7 @@
                 {recording === id ? t('outline.pressKeys') : displayShortcut(resolvedOutline[id as OutlineCommandId], isMac)}
               </button>
               {#if outlineShortcuts.overrides[id as OutlineCommandId]}
-                <button class="shortcut-reset" onclick={() => void setShortcutOverride(id as OutlineCommandId, null)}>↺</button>
+                <button class="shortcut-reset" aria-label={`${t('search.weights.resetDefault')}: ${t(OUTLINE_CMD_LABELS[id as OutlineCommandId])}`} onclick={() => void setShortcutOverride(id as OutlineCommandId, null)}>↺</button>
               {/if}
             </div>
           {/each}
@@ -1846,14 +1906,28 @@
                       onchange={(e) => savePluginNumberField(ptab.pluginId, localKey, e.currentTarget as HTMLInputElement)} />
                   {/if}
                 </label>
+                {#if pluginSaveErrors[field.key]}
+                  <div class="field-save-error" role="alert">
+                    <p class="result fail">{pluginSaveErrors[field.key]}</p>
+                    <button onclick={() => savePluginField(ptab.pluginId, localKey, pluginValues[ptab.pluginId]?.[localKey])}>{t('vaultSync.save')}</button>
+                  </div>
+                {/if}
               {/each}
             </div>
           {/if}
         {/each}
       {/if}
+      </div>
+      </div>
 
       <div class="actions">
-        <button onclick={() => (open = false)}>{t('settings.done')}</button>
+        {#each Object.entries(settingsSaveErrors) as [task, message] (task)}
+          <div class="save-feedback" role="alert">
+            <span>{message}</span>
+            <button onclick={() => settingRetries.get(task)?.()} disabled={settingsSaveBusy > 0}>{t('vaultSync.save')}</button>
+          </div>
+        {/each}
+        <button onclick={closeDialog} disabled={!canClose()}>{t('settings.done')}</button>
       </div>
     </div>
   </div>
@@ -1867,47 +1941,68 @@
     z-index: 100;
   }
   .dialog {
-    width: min(560px, 92vw);
-    max-height: 86vh;
-    overflow: auto;
-    background: Canvas;
+    width: min(920px, calc(100vw - 48px));
+    height: min(780px, calc(100dvh - 48px));
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    background: var(--ui-surface, Canvas);
     color: CanvasText;
-    border: 1px solid color-mix(in srgb, CanvasText 20%, transparent);
-    border-radius: 8px;
-    padding: 18px 20px;
+    border: 1px solid var(--ui-separator);
+    border-radius: 12px;
     box-shadow: 0 12px 40px rgba(0,0,0,0.25);
   }
-  h2 { margin: 0 0 12px 0; font-size: 16px; }
+  .dialog-header { display: flex; align-items: baseline; flex-wrap: wrap; gap: 8px 16px; padding: 18px 22px; border-bottom: 1px solid var(--ui-separator); flex-shrink: 0; }
+  h2 { margin: 0; font-size: 17px; font-weight: 600; }
+  .current-page { color: var(--ui-secondary); font-size: 13px; overflow-wrap: anywhere; }
+  .settings-layout { display: grid; grid-template-columns: 182px minmax(0, 1fr); flex: 1; min-height: 0; }
+  .settings-content { min-width: 0; min-height: 0; overflow: auto; overscroll-behavior: contain; padding: 22px 26px; scrollbar-gutter: stable; }
   h3 {
-    margin: 0 0 8px 0;
+    margin: 0 0 12px 0;
     font-size: 13px;
     font-weight: 600;
   }
   .block {
-    padding: 12px 0;
-    border-top: 1px solid color-mix(in srgb, CanvasText 10%, transparent);
+    padding: 20px 0;
+    border-top: 1px solid var(--ui-separator);
   }
   .block:first-of-type { border-top: 0; padding-top: 0; }
-  .row { display: flex; gap: 8px; align-items: center; font-size: 13px; }
+  .row { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; font-size: 13px; min-width: 0; margin-top: 8px; }
+  .row:first-child { margin-top: 0; }
+  /* Keep the control with its label. Wrapping the anonymous label text as a
+     separate flex item otherwise pushes the checkbox onto its own line. */
+  .row:has(> input[type="checkbox"]), .row:has(> input[type="radio"]),
+  .plugin-field:has(> input[type="checkbox"]) { flex-wrap: nowrap; align-items: flex-start; }
+  .row:has(> input[type="checkbox"]) .lbl,
+  .plugin-field:has(> input[type="checkbox"]) .lbl { flex: 1; width: auto; }
+  .row > input[type="checkbox"], .row > input[type="radio"],
+  .plugin-field > input[type="checkbox"] { flex: 0 0 auto; margin-top: 3px; }
+  .row > div, .row > span, .row code { min-width: 0; overflow-wrap: anywhere; }
   .row .lbl {
-    width: 60px;
+    width: 160px;
     flex-shrink: 0;
+    overflow-wrap: anywhere;
   }
-  .row select {
-    padding: 4px 8px;
-    border-radius: 4px;
-    border: 1px solid color-mix(in srgb, CanvasText 25%, transparent);
-    background: Canvas;
+  .row select, .row input:not([type="checkbox"]):not([type="radio"]), .row textarea {
+    min-width: 0;
+    min-height: 32px;
+    padding: 6px 9px;
+    border-radius: 6px;
+    border: 1px solid var(--ui-control-border);
+    background: var(--ui-surface, Canvas);
     color: CanvasText;
     font-size: 13px;
     flex: 1;
-    max-width: 240px;
+    max-width: 100%;
   }
+  .row input[type="number"] { flex: 0 1 120px; width: 120px; }
+  .row input[readonly] { color: var(--ui-secondary); background: var(--ui-bg); }
   .desc {
     font-size: 12px;
     line-height: 1.5;
     margin: 0 0 8px 0;
-    color: color-mix(in srgb, CanvasText 75%, transparent);
+    color: var(--ui-secondary);
+    overflow-wrap: anywhere;
   }
   .ext-list {
     margin: 8px 0;
@@ -1915,51 +2010,62 @@
   }
   .ext-list summary {
     cursor: pointer;
-    color: color-mix(in srgb, CanvasText 65%, transparent);
+    color: var(--ui-secondary);
     user-select: none;
   }
   .ext-list ul {
     margin: 8px 0 0 0;
     padding-left: 18px;
     line-height: 1.7;
-    color: color-mix(in srgb, CanvasText 80%, transparent);
+    color: var(--ui-secondary);
   }
-  .ext-list li { font-family: ui-monospace, Menlo, monospace; font-size: 11px; }
+  .ext-list li { font-family: ui-monospace, Menlo, monospace; font-size: 12px; overflow-wrap: anywhere; }
   .ext-list li strong { font-family: -apple-system, system-ui, sans-serif; font-size: 12px; }
-  .actions { display: flex; justify-content: flex-end; margin-top: 16px; }
+  .actions { display: flex; justify-content: flex-end; align-items: center; gap: 16px; padding: 12px 22px; border-top: 1px solid var(--ui-separator); flex-shrink: 0; max-height: 35%; overflow: auto; }
+  .save-feedback { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-right: auto; color: var(--ui-danger); font-size: 12px; min-width: 0; overflow-wrap: anywhere; }
+  .field-save-error { display: flex; align-items: center; gap: 8px; }
+  .field-save-error .result { margin: 0; flex: 1; }
   button {
-    padding: 6px 14px;
+    min-height: 32px;
+    padding: 6px 12px;
     border-radius: 6px;
-    border: 1px solid color-mix(in srgb, CanvasText 25%, transparent);
-    background: Canvas;
+    border: 1px solid var(--ui-control-border);
+    background: var(--ui-surface, Canvas);
     color: CanvasText;
     cursor: pointer;
-    font-size: 12px;
+    font-size: 13px;
+    line-height: 1.4;
+    overflow-wrap: anywhere;
   }
+  button:not(:disabled):hover { background: var(--ui-hover); }
   button:disabled { opacity: 0.5; cursor: progress; }
   .primary {
-    background: AccentColor;
-    color: AccentColorText;
-    border-color: AccentColor;
+    background: var(--ui-accent);
+    color: var(--ui-accent-foreground, white);
+    border-color: var(--ui-accent);
     font-weight: 500;
   }
+  button.primary:not(:disabled):hover { background: color-mix(in srgb, var(--ui-accent) 88%, black); }
   .result {
     margin: 10px 0 0 0;
     padding: 8px 10px;
     border-radius: 6px;
     font-size: 12px;
     line-height: 1.45;
-    background: color-mix(in srgb, CanvasText 8%, transparent);
+    background: var(--ui-bg);
+    overflow-wrap: anywhere;
   }
   .result.ok {
-    background: color-mix(in srgb, #2ea043 18%, transparent);
-    color: color-mix(in srgb, #2ea043 90%, CanvasText);
+    background: color-mix(in srgb, var(--ui-success) 8%, var(--ui-surface));
+    color: var(--ui-success);
   }
   .result.partial {
-    background: color-mix(in srgb, #d29922 22%, transparent);
+    background: color-mix(in srgb, var(--ui-warning) 8%, var(--ui-surface));
+    color: var(--ui-warning);
   }
   .result.fail {
-    background: color-mix(in srgb, #cf222e 18%, transparent);
+    background: color-mix(in srgb, var(--ui-danger) 8%, var(--ui-surface));
+    color: var(--ui-danger);
   }
   /* Design spec §7.4: the only clickable statistic row — the exit from the
      unlabeled tier's ×0.3 demotion. */
@@ -1970,8 +2076,7 @@
     padding: 2px 6px;
   }
   .tier-unlabeled:hover, .tier-unlabeled:focus-visible {
-    background: color-mix(in srgb, AccentColor 12%, transparent);
-    outline: none;
+    background: var(--ui-hover);
   }
   .glob-row input[type="text"] {
     padding: 6px;
@@ -1983,9 +2088,10 @@
   }
   .undo-note {
     margin: 10px 0 0 0;
-    font-size: 11px;
+    font-size: 12px;
     line-height: 1.5;
-    color: color-mix(in srgb, CanvasText 60%, transparent);
+    color: var(--ui-secondary);
+    overflow-wrap: anywhere;
   }
   .progress {
     height: 8px;
@@ -1996,54 +2102,62 @@
   }
   .progress .bar {
     height: 100%;
-    background: AccentColor;
+    background: var(--ui-accent);
     transition: width 0.2s ease-out;
   }
   .tab-strip {
     display: flex;
+    flex-direction: column;
     gap: 4px;
-    border-bottom: 1px solid color-mix(in srgb, CanvasText 20%, transparent);
-    margin-bottom: 12px;
+    min-height: 0;
+    overflow: auto;
+    overscroll-behavior: contain;
+    padding: 12px;
+    border-right: 1px solid var(--ui-separator);
+    background: var(--ui-bg);
   }
   .tab-strip button {
     background: transparent;
     border: 0;
-    padding: 8px 12px;
+    padding: 9px 12px;
+    text-align: start;
+    flex-shrink: 0;
     cursor: pointer;
-    border-bottom: 2px solid transparent;
-    font-size: 12px;
+    font-size: 13px;
     color: CanvasText;
-    border-radius: 0;
+    border-radius: 7px;
   }
   .tab-strip button.active {
-    border-bottom-color: AccentColor;
+    background: var(--ui-selection);
     font-weight: 600;
   }
   .plugin-settings { display: flex; flex-direction: column; gap: 12px; padding: 4px 0; }
-  .plugin-field { display: flex; align-items: center; gap: 12px; font-size: 13px; }
+  .plugin-field { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; font-size: 13px; min-width: 0; }
   .plugin-field .lbl { width: 160px; flex-shrink: 0; }
   .plugin-field input[type="text"],
   .plugin-field input[type="password"],
   .plugin-field input[type="number"],
   .plugin-field select {
     flex: 1;
+    min-width: 0;
+    min-height: 32px;
     padding: 6px;
     border-radius: 4px;
-    border: 1px solid color-mix(in srgb, CanvasText 25%, transparent);
-    background: Canvas;
+    border: 1px solid var(--ui-control-border);
+    background: var(--ui-surface, Canvas);
     color: CanvasText;
-    font-size: 12px;
+    font-size: 13px;
   }
   .shortcut-row {
     display: flex;
+    flex-wrap: wrap;
     gap: 8px;
     align-items: center;
     margin-bottom: 6px;
     font-size: 13px;
   }
   .shortcut-label {
-    width: 120px;
-    flex-shrink: 0;
+    flex: 1 1 160px;
   }
   .shortcut-input {
     font-family: ui-monospace, Menlo, monospace;
@@ -2059,11 +2173,12 @@
   .shortcut-reset {
     padding: 4px 8px;
     font-size: 13px;
-    opacity: 0.6;
+    color: var(--ui-secondary);
   }
   .shortcut-reset:hover { opacity: 1; }
   .field-row {
     display: flex;
+    flex-wrap: wrap;
     gap: 8px;
     align-items: center;
     margin-bottom: 6px;
@@ -2075,17 +2190,31 @@
   }
   .field-row input[type="text"] {
     flex: 1;
+    min-width: 0;
     padding: 4px 8px;
     border-radius: 4px;
     border: 1px solid color-mix(in srgb, CanvasText 25%, transparent);
     background: Canvas;
     color: CanvasText;
-    font-size: 12px;
-    max-width: 200px;
+    font-size: 13px;
+    max-width: 100%;
   }
   .shortcut-conflict {
-    color: #d44a4a;
+    color: var(--ui-danger);
     font-size: 12px;
     margin: 4px 0 0 0;
+  }
+  @media (max-width: 560px) {
+    .dialog { width: calc(100vw - 24px); height: calc(100dvh - 24px); }
+    .dialog-header { padding: 14px 16px; }
+    .settings-layout { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 124px) minmax(0, 1fr); }
+    .tab-strip { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px; align-content: start; padding: 8px; border-right: 0; border-bottom: 1px solid var(--ui-separator); }
+    .tab-strip button { min-width: 0; }
+    .settings-content { padding: 18px 16px; }
+    .row .lbl, .plugin-field .lbl, .field-row label { width: 100%; flex-basis: 100%; }
+    .actions { padding: 12px 16px; }
+  }
+  @media (max-height: 440px) and (max-width: 560px) {
+    .settings-layout { grid-template-rows: minmax(0, 78px) minmax(0, 1fr); }
   }
 </style>

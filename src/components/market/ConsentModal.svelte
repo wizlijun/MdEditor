@@ -6,6 +6,8 @@
      to exactly what passed verification. Only on "Trust & Install" do we call
      `plugin_market_install`. -->
 <script lang="ts">
+  import '../../styles/ui-foundation.css'
+  import { modalFocus } from '../../lib/ui/modal-focus'
   import { invoke } from '@tauri-apps/api/core'
   import { listen } from '@tauri-apps/api/event'
   import { i18n, t } from '../../lib/i18n/store.svelte'
@@ -122,10 +124,9 @@
   }
 </script>
 
-<div class="overlay" role="presentation" onclick={() => !installing && onClose()}
-     onkeydown={(e) => e.key === 'Escape' && !installing && onClose()}>
-  <div class="modal" role="dialog" aria-modal="true" onclick={(e) => e.stopPropagation()}>
-    <h2>{t('pluginMarket.consent.title', { name: displayName })}</h2>
+<div class="overlay ui-surface" role="presentation" onclick={(event) => event.target === event.currentTarget && !installing && onClose()}>
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="plugin-consent-title" aria-busy={loading || installing} use:modalFocus={{ onClose, canClose: () => !installing }}>
+    <h2 id="plugin-consent-title">{t('pluginMarket.consent.title', { name: displayName })}</h2>
     <p class="ver">{id} · {version}</p>
 
     {#if loading}
@@ -141,7 +142,7 @@
         <p class="progress-text">{progressText}</p>
       {/if}
     {:else if error}
-      <p class="msg error">{error}</p>
+      <p class="msg error" role="alert">{error}</p>
     {:else}
       {#if displayDescription}
         <p class="desc">{displayDescription}</p>
@@ -177,6 +178,7 @@
 
     <div class="actions">
       <button class="ghost" onclick={onClose} disabled={installing}>{t('pluginMarket.cancel')}</button>
+      {#if error}<button class="ghost" onclick={preview} disabled={installing}>{t('pluginMarket.refresh')}</button>{/if}
       <button class="primary" onclick={confirmInstall} disabled={loading || installing || !!error}>
         {installing ? t('pluginMarket.installing') : t('pluginMarket.consent.trustInstall')}
       </button>
@@ -191,27 +193,28 @@
     display: flex; align-items: center; justify-content: center; padding: 20px;
   }
   .modal {
+    box-sizing: border-box;
     background: Canvas; color: CanvasText;
     border: 1px solid color-mix(in srgb, CanvasText 18%, transparent);
     border-radius: 12px; padding: 20px 22px; width: min(460px, 100%);
-    max-height: 82vh; overflow: auto; box-shadow: 0 12px 40px rgba(0,0,0,0.28);
+    max-height: calc(100dvh - 40px); overflow: auto; box-shadow: 0 12px 40px rgba(0,0,0,0.28);
   }
   h2 { margin: 0 0 2px; font-size: 15px; }
-  .ver { margin: 0 0 12px; font-size: 11px; font-family: ui-monospace, monospace;
-    color: color-mix(in srgb, CanvasText 55%, transparent); }
+  .ver { margin: 0 0 12px; font-size: 12px; font-family: ui-monospace, monospace;
+    color: var(--ui-secondary); }
   .desc { margin: 0 0 10px; font-size: 12px; line-height: 1.45;
     color: color-mix(in srgb, CanvasText 78%, transparent); }
   .intro { margin: 0 0 8px; font-size: 12px;
     color: color-mix(in srgb, CanvasText 70%, transparent); }
   .msg { font-size: 13px; padding: 10px 0; }
-  .msg.error { color: #d24; }
+  .msg.error { color: var(--ui-danger); overflow-wrap: anywhere; }
   .progress {
     height: 4px; border-radius: 2px; overflow: hidden;
     background: color-mix(in srgb, CanvasText 12%, transparent);
   }
   .progress .bar {
     height: 100%; border-radius: 2px;
-    background: color-mix(in srgb, AccentColor 85%, CanvasText);
+    background: var(--ui-accent);
     transition: width 0.2s ease;
   }
   /* No Content-Length (chunked response): sweep instead of pretending to know. */
@@ -224,10 +227,10 @@
     100% { margin-left: 100%; }
   }
   .progress-text {
-    margin: 5px 0 0; font-size: 11px;
-    color: color-mix(in srgb, CanvasText 55%, transparent);
+    margin: 5px 0 0; font-size: 12px;
+    color: var(--ui-secondary);
   }
-  .none { font-size: 12px; color: color-mix(in srgb, CanvasText 55%, transparent); }
+  .none { font-size: 12px; color: var(--ui-secondary); }
   .caps { list-style: none; margin: 0 0 4px; padding: 0; display: flex; flex-direction: column; gap: 6px; }
   .caps li {
     display: flex; align-items: center; gap: 8px; font-size: 12.5px;
@@ -241,13 +244,13 @@
   .dot { width: 6px; height: 6px; border-radius: 50%;
     background: color-mix(in srgb, CanvasText 45%, transparent); flex: 0 0 auto; }
   .caps li.sensitive .dot { background: #e0a800; }
-  .label { flex: 1; }
+  .label { flex: 1; min-width: 0; overflow-wrap: anywhere; }
   .warn-tag {
-    font-size: 10px; text-transform: uppercase; letter-spacing: 0.4px;
+    font-size: 12px; text-transform: uppercase; letter-spacing: 0.4px;
     padding: 1px 6px; border-radius: 999px; font-weight: 600;
     background: #e0a800; color: #1a1400;
   }
-  .actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
+  .actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; margin-top: 16px; }
   button {
     font-size: 12.5px; padding: 6px 14px; border-radius: 7px; cursor: pointer;
     border: 1px solid color-mix(in srgb, CanvasText 20%, transparent);
@@ -255,7 +258,7 @@
   }
   button:disabled { opacity: 0.5; cursor: default; }
   .primary {
-    background: color-mix(in srgb, #2f7bd6 90%, CanvasText); color: white;
+    background: var(--ui-accent); color: var(--ui-accent-foreground);
     border-color: transparent; font-weight: 600;
   }
 </style>

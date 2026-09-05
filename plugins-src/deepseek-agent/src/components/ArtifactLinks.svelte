@@ -31,7 +31,7 @@
     {#each paths as path (path)}
       <button class="link" onclick={() => open(path)} title={path}>{name(path)}</button>
     {/each}
-    {#if failed}<span class="err">{failed}</span>{/if}
+    {#if failed}<span class="err" role="alert">{failed}</span>{/if}
   </div>
 {/if}
 
@@ -45,8 +45,8 @@
     font-size: 12px;
     border-top: 1px solid color-mix(in srgb, currentColor 12%, transparent);
   }
-  .artifacts.compact { padding: 2px 0; border-top: 0; font-size: 11px; }
-  .lead { opacity: 0.55; }
+  .artifacts.compact { padding: 2px 0; border-top: 0; font-size: 12px; }
+  .lead { color: var(--ui-secondary); }
   /* A button inherits no font — say so, or these drift out of line. */
   .link {
     font: inherit;
@@ -54,15 +54,15 @@
     padding: 0;
     border: 0;
     background: none;
-    color: inherit;
+    color: var(--ui-accent-text);
     cursor: pointer;
     text-decoration: underline;
     text-underline-offset: 2px;
-    max-width: 260px;
+    max-width: min(260px, 100%);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
-  .link:hover { opacity: 0.7; }
-  .err { color: #d9534f; }
+  .link:hover { text-decoration-thickness: 2px; }
+  .err { color: var(--ui-danger); }
 </style>

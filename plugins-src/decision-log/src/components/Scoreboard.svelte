@@ -75,6 +75,7 @@
     border-left: 1px solid var(--line, #e5e7eb);
     box-sizing: border-box;
     overflow-y: auto;
+    overflow-wrap: anywhere;
   }
   .points { display: flex; align-items: baseline; gap: 0.4rem; margin-bottom: 1rem; }
   .points-num { font-size: 1.8rem; font-weight: 700; font-variant-numeric: tabular-nums; }
@@ -90,10 +91,13 @@
   .bar-fill { height: 100%; background: var(--accent, #2563eb); border-radius: 3px; transition: width 0.2s; }
   .samples { margin: 1rem 0 0; font-size: 0.85rem; }
   .samples-num { font-size: 1.4rem; font-weight: 600; margin-right: 0.25rem; }
-  .hint { margin: 0.75rem 0 0; font-size: 0.8rem; opacity: 0.55; line-height: 1.4; }
+  .hint { margin: 0.75rem 0 0; font-size: 13px; color: var(--ui-secondary); line-height: 1.4; }
   .avoidance { margin-top: 1rem; }
   .avoidance-lead { font-size: 0.75rem; opacity: 0.6; }
   .avoidance ul { margin: 0.35rem 0 0; padding-left: 1rem; font-size: 0.82rem; }
   .avoidance li { margin: 0.15rem 0; }
   .avoid-n { opacity: 0.55; }
+  @media (max-width: 660px) {
+    .rail { width: 100%; flex: none; border-left: 0; border-top: 1px solid var(--line, #e5e7eb); }
+  }
 </style>

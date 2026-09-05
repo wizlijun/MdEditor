@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { modalFocus } from '../../../../src/lib/ui/modal-focus'
   import type { LibraryBook } from '../lib/library'
   import { classificationProposalIsValid, type TopicClassificationProposal } from '../lib/topic-classification'
   import type { TopicDefinition } from '../lib/topics'
@@ -32,7 +33,7 @@
 </script>
 
 <div class="backdrop">
-  <div class="review" role="dialog" aria-modal="true" aria-labelledby="classification-title">
+  <div class="review" role="dialog" aria-modal="true" aria-busy={applying} aria-labelledby="classification-title" use:modalFocus={{ onClose: oncancel, canClose: () => !applying }}>
     <header>
       <h2 id="classification-title">{t('topic.classificationTitle')}</h2>
       <p>{t('topic.classificationHint')}</p>
@@ -103,7 +104,7 @@
     margin: 0;
   }
   h2 { font-size: 15px; }
-  header p { margin-top: 4px; font-size: 11px; opacity: 0.65; }
+  header p { margin-top: 4px; font-size: 12px; color: var(--ui-secondary); }
   .assignments {
     min-height: 0;
     overflow-y: auto;
@@ -120,8 +121,8 @@
   .assignments label:last-child { border-bottom: 0; }
   .book { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
   .book strong,
-  .book small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .book small { opacity: 0.5; }
+  .book small { overflow-wrap: anywhere; }
+  .book small { color: var(--ui-secondary); }
   select {
     min-width: 0;
     font: inherit;
@@ -131,9 +132,9 @@
     border-radius: 6px;
     padding: 5px 7px;
   }
-  footer { display: flex; align-items: center; gap: 8px; }
-  footer span { margin-right: auto; font-size: 11px; opacity: 0.62; }
-  footer span.error { color: #c62828; opacity: 1; }
+  footer { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+  footer span { margin-right: auto; font-size: 12px; color: var(--ui-secondary); }
+  footer span.error { color: var(--ui-danger); opacity: 1; }
   button { font: inherit; color: inherit; cursor: pointer; }
   button.secondary,
   button.primary {
@@ -142,6 +143,7 @@
     padding: 5px 12px;
   }
   button.secondary { background: transparent; }
-  button.primary { background: color-mix(in srgb, currentColor 12%, transparent); font-weight: 600; }
+  button.primary { background: var(--ui-accent); color: white; border-color: transparent; font-weight: 600; }
   button:disabled { cursor: default; opacity: 0.48; }
+  @media (max-width: 560px) { .assignments label { grid-template-columns: minmax(0, 1fr); } }
 </style>

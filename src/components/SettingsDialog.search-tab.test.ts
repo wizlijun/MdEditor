@@ -86,7 +86,11 @@ import { sidePanels } from '../lib/side-panel/registry.svelte'
 import { toasts } from '../lib/toast.svelte'
 import { getPluginScopedAll, settings } from '../lib/settings.svelte'
 import { DEFAULT_SMART_LOOKUP_SETTINGS } from '../lib/smart-search/settings'
-import { ask } from '@tauri-apps/plugin-dialog'
+import { ask, open as openFilePicker } from '@tauri-apps/plugin-dialog'
+import * as settingsModule from '../lib/settings.svelte'
+import * as toastModule from '../lib/toast.svelte'
+import { t } from '../lib/i18n/store.svelte'
+import { pendingThemeImport } from '../lib/theme-import-bus.svelte'
 
 let stats: Mock<() => Promise<SearchStats | null>>
 let progress: Mock<() => Promise<SearchProgress | null>>
@@ -131,12 +135,209 @@ beforeEach(() => {
 let currentApp: ReturnType<typeof mount> | null = null
 
 afterEach(() => {
+  vi.restoreAllMocks()
   closeSettings()
   sotvaultStore.vaultRoot = null
   if (currentApp) {
     try { unmount(currentApp) } catch { /* already unmounted by the test itself */ }
     currentApp = null
   }
+})
+
+describe('SettingsDialog — accessible modal and persistent navigation', () => {
+  function key(key: string, options: KeyboardEventInit = {}) {
+    const event = new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true, ...options })
+    document.activeElement!.dispatchEvent(event)
+    return event
+  }
+  function autoSaveControl() {
+    const label = Array.from(document.querySelectorAll('label')).find((item) => item.textContent?.includes(t('settings.autoSaveLabel')))
+    return label!.querySelector('input')!
+  }
+
+  it('keeps labelled navigation and Done separate from the scrolling content', async () => {
+    await mountDialog()
+    await settle()
+    const dialog = document.querySelector('[role="dialog"]')!
+    expect(document.getElementById(dialog.getAttribute('aria-labelledby')!)?.textContent).toBe(t('settings.title'))
+    const content = dialog.querySelector('.settings-content')!
+    expect(content.getAttribute('role')).toBe('region')
+    expect(content.contains(dialog.querySelector('nav'))).toBe(false)
+    expect(content.contains(buttonByText(dialog, t('settings.done')))).toBe(false)
+    expect(dialog.querySelectorAll('nav [aria-current="page"]')).toHaveLength(1)
+    openSettings('search')
+    await settle()
+    expect(dialog.querySelector('nav [aria-current="page"]')?.textContent?.trim()).toBe(t('settings.tab.search'))
+    expect(content.getAttribute('aria-label')).toBe(t('settings.tab.search'))
+  })
+
+  it('traps forward/backward Tab and restores the opener when Escape closes settings', async () => {
+    const trigger = document.createElement('button')
+    document.body.append(trigger)
+    trigger.focus()
+    await mountDialog()
+    await settle()
+    const first = document.querySelector('nav button')!
+    expect(document.activeElement).toBe(first)
+    expect(key('Tab', { shiftKey: true }).defaultPrevented).toBe(true)
+    expect(document.activeElement?.textContent).toBe(t('settings.done'))
+    key('Tab')
+    expect(document.activeElement).toBe(first)
+    key('Escape')
+    await settle()
+    expect(document.querySelector('[role="dialog"]')).toBeNull()
+    expect(document.activeElement).toBe(trigger)
+  })
+
+  it('keeps Escape as cancel-recording before it can close the dialog', async () => {
+    await mountDialog()
+    await settle()
+    openSettings('outline-notes')
+    await settle()
+    const record = document.querySelector<HTMLButtonElement>('.shortcut-input')!
+    record.focus()
+    record.click()
+    await settle()
+    expect(record.classList.contains('recording')).toBe(true)
+    key('Escape')
+    await settle()
+    expect(record.classList.contains('recording')).toBe(false)
+    expect(document.querySelector('[role="dialog"]')).not.toBeNull()
+    key('Escape')
+    await settle()
+    expect(document.querySelector('[role="dialog"]')).toBeNull()
+  })
+
+  it('gives every displayed core and search form field a real accessible name', async () => {
+    await mountDialog()
+    await settle()
+    for (const tab of ['core', 'search']) {
+      openSettings(tab)
+      await settle()
+      for (const field of document.querySelectorAll<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>('input, select, textarea')) {
+        const label = field.getAttribute('aria-label') || field.getAttribute('aria-labelledby')
+          || Array.from(field.labels ?? []).map((item) => item.textContent?.trim()).join('')
+        expect(label, `missing field name: ${field.outerHTML}`).toBeTruthy()
+      }
+    }
+  })
+
+  it('keeps a failed settings save visible and retries without claiming success early', async () => {
+    const save = vi.spyOn(settingsModule, 'saveSettings').mockRejectedValueOnce(new Error('disk unavailable')).mockResolvedValue(undefined)
+    await mountDialog()
+    await settle()
+    const input = autoSaveControl()
+    input.checked = !input.checked
+    input.dispatchEvent(new Event('change', { bubbles: true }))
+    await settle()
+    const feedback = document.querySelector('.save-feedback[role="alert"]')!
+    expect(feedback.textContent).toContain('disk unavailable')
+    buttonByText(feedback, t('vaultSync.save')).click()
+    await settle()
+    expect(save).toHaveBeenCalledTimes(2)
+    expect(document.querySelector('.save-feedback')).toBeNull()
+  })
+
+  it.each([
+    ['settings.dailyNotes.label', 'set_daily_notes_enabled'],
+    ['settings.mcp.enable', 'set_mcp_enabled'],
+  ] as const)('retries both persistence and runtime activation for %s without hiding another task failure', async (labelKey, command) => {
+    const save = vi.spyOn(settingsModule, 'saveSettings').mockRejectedValueOnce(new Error('disk unavailable')).mockResolvedValue(undefined)
+    const activate = vi.fn().mockRejectedValueOnce(new Error('runtime unavailable')).mockResolvedValue(undefined)
+    invokeMock.mockImplementation(async (cmd: string, args?: unknown) => cmd === command ? activate(args) : defaultInvokeImpl(cmd, args))
+    await mountDialog()
+    await settle()
+    const label = Array.from(document.querySelectorAll('label')).find((item) => item.textContent?.trim() === t(labelKey))!
+    const input = label.querySelector('input')!
+    input.checked = !input.checked
+    const enabled = input.checked
+    input.dispatchEvent(new Event('change', { bubbles: true }))
+    await settle()
+    expect(activate).not.toHaveBeenCalled()
+    expect(document.querySelector('.save-feedback')?.textContent).toContain('disk unavailable')
+
+    autoSaveControl().dispatchEvent(new Event('change', { bubbles: true }))
+    await settle()
+    expect(document.querySelector('.save-feedback')?.textContent).toContain('disk unavailable')
+    buttonByText(document.querySelector('.save-feedback')!, t('vaultSync.save')).click()
+    await settle()
+    expect(activate).toHaveBeenCalledWith({ enabled })
+    expect(document.querySelector('.save-feedback')?.textContent).toContain('runtime unavailable')
+    buttonByText(document.querySelector('.save-feedback')!, t('vaultSync.save')).click()
+    await settle()
+    expect(save).toHaveBeenCalledTimes(4)
+    expect(activate).toHaveBeenCalledTimes(2)
+    expect(document.querySelector('.save-feedback')).toBeNull()
+  })
+
+  it('does not dismiss a pending setting write with Escape or the backdrop', async () => {
+    let finish!: () => void
+    vi.spyOn(settingsModule, 'saveSettings').mockImplementationOnce(() => new Promise<void>((resolve) => { finish = resolve }))
+    await mountDialog()
+    await settle()
+    autoSaveControl().dispatchEvent(new Event('change', { bubbles: true }))
+    await settle()
+    expect(buttonByText(document, t('settings.done')).disabled).toBe(true)
+    key('Escape')
+    document.querySelector<HTMLElement>('.overlay')!.click()
+    await settle()
+    expect(document.querySelector('[role="dialog"]')).not.toBeNull()
+    finish()
+    await settle()
+    expect(buttonByText(document, t('settings.done')).disabled).toBe(false)
+  })
+
+  it.each([
+    ['settings.revealThemes', 'theme_reveal'],
+    ['settings.restoreBuiltins', 'theme_restore_builtins'],
+  ] as const)('reports failure of the explicit %s action', async (labelKey, command) => {
+    const toast = vi.spyOn(toastModule, 'pushToast').mockReturnValue(1)
+    invokeMock.mockImplementation(async (cmd: string, args?: unknown) => {
+      if (cmd === command) throw new Error('theme action unavailable')
+      return defaultInvokeImpl(cmd, args)
+    })
+    await mountDialog()
+    await settle()
+    buttonByText(document, t(labelKey)).click()
+    await settle()
+    expect(invokeMock).toHaveBeenCalledWith(command)
+    expect(toast).toHaveBeenCalledWith({ level: 'error', message: t(labelKey), detail: 'Error: theme action unavailable' })
+    expect(document.querySelector('[role="dialog"]')).not.toBeNull()
+  })
+
+  it.each(['picker', 'preparation'] as const)('reports theme import %s failure while retaining the existing error report', async (stage) => {
+    const toast = vi.spyOn(toastModule, 'pushToast').mockReturnValue(1)
+    if (stage === 'picker') vi.mocked(openFilePicker).mockRejectedValueOnce(new Error('file picker unavailable'))
+    else vi.mocked(openFilePicker).mockResolvedValueOnce('/tmp/theme.zip')
+    invokeMock.mockImplementation(async (cmd: string, args?: unknown) => {
+      if (cmd === 'theme_import') throw new Error('invalid theme archive')
+      return defaultInvokeImpl(cmd, args)
+    })
+    await mountDialog()
+    await settle()
+    buttonByText(document, t('settings.importTypora')).click()
+    await settle()
+    const failure = stage === 'picker' ? 'file picker unavailable' : 'invalid theme archive'
+    expect(toast).toHaveBeenCalledWith({ level: 'error', message: t('settings.importTypora'), detail: `Error: ${failure}` })
+    expect(document.querySelectorAll('[role="dialog"]')).toHaveLength(2)
+    expect(document.body.textContent).toContain(failure)
+    expect(document.querySelector<HTMLButtonElement>('.dialog .dialog button.primary')!.disabled).toBe(true)
+    if (stage === 'picker') expect(invokeMock.mock.calls.some(([cmd]) => cmd === 'theme_import')).toBe(false)
+    else expect(invokeMock).toHaveBeenCalledWith('theme_import', { zipPath: '/tmp/theme.zip' })
+  })
+
+  it('closes only the nested theme import on Escape and returns focus inside Settings', async () => {
+    invokeMock.mockImplementation(async (cmd: string, args?: unknown) => cmd === 'theme_cancel_import' ? undefined : defaultInvokeImpl(cmd, args))
+    await mountDialog()
+    await settle()
+    pendingThemeImport.report = { themes: [], asset_dirs: [], errors: [], staging_dir: '/tmp/themes' }
+    await settle()
+    expect(document.querySelectorAll('[role="dialog"]')).toHaveLength(2)
+    key('Escape')
+    await settle()
+    expect(document.querySelectorAll('[role="dialog"]')).toHaveLength(1)
+    expect(document.querySelector('[role="dialog"]')!.contains(document.activeElement)).toBe(true)
+  })
 })
 
 async function mountDialog() {

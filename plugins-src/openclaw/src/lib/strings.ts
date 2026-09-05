@@ -8,6 +8,12 @@
 export type Locale = 'en' | 'zh' | 'ja' | 'de'
 
 export type MessageKey =
+  | 'chat.session'
+  | 'chat.messages'
+  | 'chat.sending'
+  | 'chat.sendFailed'
+  | 'chat.uploadFailed'
+  | 'chat.sendShortcut'
   | 'common.cancel'
   | 'chat.connectTitle'
   | 'chat.enterPairingCode'
@@ -43,6 +49,12 @@ export type MessageKey =
 type Catalog = Record<MessageKey, string>
 
 const en: Catalog = {
+  'chat.session': "Conversation",
+  'chat.messages': "Messages",
+  'chat.sending': "Sending…",
+  'chat.sendFailed': "Message not sent. Your draft is still here",
+  'chat.uploadFailed': "Attachment upload failed. Select the file to retry",
+  'chat.sendShortcut': "⌘/Ctrl + Enter to send · Enter for a new line",
   'common.cancel': 'Cancel',
   'chat.connectTitle': 'Connect to your OpenClaw',
   'chat.enterPairingCode': "Enter the pairing code shown on your host machine's note.md settings.",
@@ -77,6 +89,12 @@ const en: Catalog = {
 }
 
 const zh: Catalog = {
+  'chat.session': "当前会话",
+  'chat.messages': "会话消息",
+  'chat.sending': "正在发送…",
+  'chat.sendFailed': "消息未发送，输入内容已保留",
+  'chat.uploadFailed': "附件上传失败，请重新选择文件重试",
+  'chat.sendShortcut': "⌘/Ctrl + Enter 发送 · Enter 换行",
   'common.cancel': '取消',
   'chat.connectTitle': '连接到你的 OpenClaw',
   'chat.enterPairingCode': '输入你主机上 note.md 设置中显示的配对码。',
@@ -111,6 +129,12 @@ const zh: Catalog = {
 }
 
 const ja: Catalog = {
+  'chat.session': "会話",
+  'chat.messages': "メッセージ",
+  'chat.sending': "送信中…",
+  'chat.sendFailed': "送信できませんでした。入力内容は保持されています",
+  'chat.uploadFailed': "添付に失敗しました。ファイルを選び直して再試行してください",
+  'chat.sendShortcut': "⌘/Ctrl + Enter で送信 · Enter で改行",
   'common.cancel': 'キャンセル',
   'chat.connectTitle': 'OpenClaw に接続',
   'chat.enterPairingCode': 'ホストマシンの note.md 設定に表示されるペアリングコードを入力してください。',
@@ -145,6 +169,12 @@ const ja: Catalog = {
 }
 
 const de: Catalog = {
+  'chat.session': "Unterhaltung",
+  'chat.messages': "Nachrichten",
+  'chat.sending': "Wird gesendet…",
+  'chat.sendFailed': "Nachricht nicht gesendet. Der Entwurf bleibt erhalten",
+  'chat.uploadFailed': "Anhang konnte nicht hochgeladen werden. Datei erneut auswählen",
+  'chat.sendShortcut': "⌘/Strg + Eingabe zum Senden · Eingabe für eine neue Zeile",
   'common.cancel': 'Abbrechen',
   'chat.connectTitle': 'Mit Ihrem OpenClaw verbinden',
   'chat.enterPairingCode': 'Geben Sie den Kopplungscode ein, der in den note.md-Einstellungen Ihres Host-Computers angezeigt wird.',

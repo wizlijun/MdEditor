@@ -7,16 +7,16 @@
   const messages = $derived(state.currentSessionId ? (state.messagesBySession[state.currentSessionId] ?? []) : [])
 </script>
 
-<div class="list">
+<section class="list" aria-label={t('chat.messages')}>
   {#each messages as m (m.id)}
     <MessageBubble message={m} />
   {/each}
   {#if messages.length === 0}
     <p class="empty">{t('chat.noMessages')}</p>
   {/if}
-</div>
+</section>
 
 <style>
-  .list { display: flex; flex-direction: column; padding: 0.75rem; overflow-y: auto; flex: 1; }
-  .empty { color: #777; text-align: center; margin-top: 2rem; }
+  .list { display: flex; flex-direction: column; padding: 12px; overflow-y: auto; overflow-x: hidden; flex: 1; min-height: 0; min-width: 0; }
+  .empty { color: var(--ui-secondary); text-align: center; margin-top: 2rem; }
 </style>

@@ -279,4 +279,43 @@ describe('Meetings UI', () => {
     await vi.waitFor(() => expect(libraryLoads).toBe(2))
     expect(document.body.textContent).toContain('team/transcripts')
   })
+
+  it('renders the host language on the first frame and keeps failed settings available to retry', async () => {
+    let rejectSave!: (cause: Error) => void
+    const request = vi.fn(async (method: string) => {
+      if (method === 'host.vault.info') return { root: '/vault' }
+      if (method === 'plugin.detect_env') return { settings: { meetings_root: 'ssot/meetings' } }
+      if (method === 'plugin.library_list') return { meetings: [] }
+      if (method === 'plugin.save_settings') return await new Promise((_resolve, reject) => { rejectSave = reject })
+      throw new Error(`unexpected RPC: ${method}`)
+    })
+    window.notemd = {
+      pluginId: 'notemd.meetings', locale: 'zh', theme: 'light', request, onMessage: () => {},
+    } satisfies NotemdBridge
+    app = mount(App, { target: document.body })
+    expect(button('设置')).toBeTruthy()
+    expect(document.querySelector('h1')?.textContent).toBe('会议记录')
+    await vi.waitFor(() => expect(button('设置').disabled).toBe(false))
+    button('设置').click(); await tick()
+    const input = document.querySelector<HTMLInputElement>('#meetings-root')!
+    input.value = 'team/transcripts'
+    input.dispatchEvent(new Event('input', { bubbles: true }))
+    button('保存设置').click(); await tick()
+    expect(input.disabled).toBe(true)
+    expect(button('关闭').disabled).toBe(true)
+    expect(button('设置').disabled).toBe(true)
+    expect(button('从 Hemory 迁移…').disabled).toBe(true)
+    const emptyMigration = button('从 Hemory 迁移…', document.querySelector('.library')!)
+    expect(emptyMigration.disabled).toBe(true)
+    // Programmatic events can bypass disabled's native click suppression.
+    emptyMigration.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    await tick()
+    expect(document.querySelector('#meetings-settings')).not.toBeNull()
+    rejectSave(new Error('无法保存目录'))
+    await vi.waitFor(() => expect(document.body.textContent).toContain('无法保存目录'))
+    expect(input.value).toBe('team/transcripts')
+    expect(input.disabled).toBe(false)
+    expect(button('保存设置').disabled).toBe(false)
+    expect(button('设置').getAttribute('aria-expanded')).toBe('true')
+  })
 })

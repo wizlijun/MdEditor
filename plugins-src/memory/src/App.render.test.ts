@@ -52,6 +52,23 @@ async function render(request: ReturnType<typeof rpcMock>) {
 }
 
 describe('Memory Protocol v2 app', () => {
+  it('keeps add-sheet keyboard focus inside and returns to the opener on Escape', async () => {
+    const request = rpcMock(async (method) => method === 'host.memory.v2.snapshot' ? baseSnapshot() : {})
+    await render(request)
+    const opener = button('添加主张')!
+    opener.focus(); opener.click(); await settle()
+    const dialog = document.querySelector<HTMLElement>('[aria-labelledby=add-title]')!
+    expect(dialog.contains(document.activeElement)).toBe(true)
+    opener.focus()
+    expect(dialog.contains(document.activeElement)).toBe(true)
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', isComposing: true, bubbles: true, cancelable: true }))
+    await settle()
+    expect(document.querySelector('[aria-labelledby=add-title]')).not.toBeNull()
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }))
+    await settle()
+    expect(document.querySelector('[aria-labelledby=add-title]')).toBeNull()
+    expect(document.activeElement).toBe(opener)
+  })
   it('integrates the unified Role and Scope manager into the main tabs', async () => {
     const request = rpcMock(async (method) => {
       if (method === 'host.memory.v2.snapshot') return baseSnapshot()
@@ -448,6 +465,33 @@ describe('Memory Protocol v2 app', () => {
     button('采用批准决定')!.click(); await settle()
     const call = request.mock.calls.find(([method]) => method === 'host.memory.v2.resolve')!
     expect(call[1]).toMatchObject({ conflict_id: 'conflict-1', strategy: 'keep-head', selected_revision_id: 'head-a', expected_heads: [{ revision_id: 'head-a', payload_sha256: 'sha-a' }, { revision_id: 'head-b', payload_sha256: 'sha-b' }] })
+  })
+
+  it('protects an in-flight merge and shows a failed save inside the open dialog', async () => {
+    let rejectSave!: (cause: Error) => void
+    const conflict = { conflict_id: 'conflict-1', claim_id: 'claim-1', risk_class: 'informational', action_allowed: false,
+      heads: [revision({ revision_id: 'head-a', text: '版本 A' }), revision({ revision_id: 'head-b', text: '版本 B' })], reasons: ['concurrent-heads'] }
+    const request = rpcMock(async (method) => {
+      if (method === 'host.memory.v2.snapshot') return { ...baseSnapshot(), conflicts: [conflict] }
+      if (method === 'host.memory.v2.resolve') return await new Promise((_resolve, reject) => { rejectSave = reject })
+      return {}
+    })
+    await render(request); tab('冲突与历史').click(); flushSync()
+    button('合并编辑…')!.click(); await settle()
+    const dialog = document.querySelector<HTMLElement>('[aria-labelledby=merge-title]')!
+    const input = dialog.querySelector('textarea')!
+    const draft = input.value
+    button('保存合并')!.click(); await settle()
+    expect(dialog.querySelector<HTMLButtonElement>('[aria-label="关闭合并编辑"]')!.disabled).toBe(true)
+    expect(input.disabled).toBe(true)
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }))
+    await settle()
+    expect(dialog.isConnected).toBe(true)
+    rejectSave(new Error('保存失败，请重试')); await settle()
+    expect(dialog.querySelector('[role=alert]')?.textContent).toContain('保存失败，请重试')
+    expect(input.value).toBe(draft)
+    expect(input.disabled).toBe(false)
+    expect(button('保存合并')!.disabled).toBe(false)
   })
 
   it('shows an uninitialized v2 Vault as read-only without any compatibility or migration action', async () => {

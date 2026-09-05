@@ -651,25 +651,23 @@ export async function reload(): Promise<void> {
   state.docs = listIdeas(entries)
 }
 
-/**
- * Persists `.notemd/idea-spark.json`. Failure is reported, never thrown.
- *
- * Exported because `pending` is the one piece of this state that MUST reach
- * disk the moment it changes: a run registered only in memory is lost to a
- * window close (or a crash), and nothing would ever reconcile it — the idea
- * would sit as a draft while claude-agent quietly finished arguing it.
- */
+/** Shared state serialization. Explicit settings writes propagate rejection. */
+async function writeState(ideaDir = state.ideaDir): Promise<void> {
+  await vaultWrite(
+    STATE_PATH,
+    serializeState({
+      ideaDir,
+      pendingRuns: { ...state.pending },
+      inboxOpen: state.inboxOpen,
+      placeholderSeq: state.placeholderSeq,
+    }),
+  )
+}
+
+/** Best-effort background persistence; explicit directory saves use writeState. */
 export async function persist(): Promise<void> {
   try {
-    await vaultWrite(
-      STATE_PATH,
-      serializeState({
-        ideaDir: state.ideaDir,
-        pendingRuns: { ...state.pending },
-        inboxOpen: state.inboxOpen,
-        placeholderSeq: state.placeholderSeq,
-      }),
-    )
+    await writeState()
   } catch (e) {
     console.error('[idea-spark] writing plugin state failed:', e)
   }
@@ -1167,10 +1165,13 @@ const RENAME_ERROR: Record<'empty' | 'slash' | 'dot' | 'taken', MessageKey> = {
  * when the directory is rejected, so the popover can keep the field open.
  */
 export async function saveIdeaDir(dir: string): Promise<boolean> {
-  if (!changeIdeaDir(state, dir)) return false
+  const normalized = normalizeIdeaDir(dir)
+  if (normalized === null) return false
   state.busy = true
   try {
-    await persist()
+    // Keep the old document attached if the settings write is rejected.
+    await writeState(normalized)
+    changeIdeaDir(state, normalized)
     await reload()
     return true
   } finally {

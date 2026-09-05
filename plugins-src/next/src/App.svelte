@@ -1,4 +1,5 @@
 <script lang="ts">
+  import '../../../src/styles/ui-foundation.css'
   import { onMount, tick } from 'svelte'
   import CreateIdeaSheet, { type IdeaDraft } from './components/CreateIdeaSheet.svelte'
   import CreateTaskSheet, { type TaskDraft } from './components/CreateTaskSheet.svelte'
@@ -523,6 +524,7 @@
   onscroll={closePreview}
 />
 
+<div class="window-surface ui-surface">
 <main class="app">
   <header class="topbar">
     <div class="title-block">
@@ -757,6 +759,7 @@
     onSubmit={submitTask}
   />
 {/if}
+</div>
 
 <style>
   :global(:root) {
@@ -807,6 +810,7 @@
   :global(html), :global(body) { height: 100%; }
   :global(body) { margin: 0; background: var(--bg); color: var(--fg); font: 13px/1.45 -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'PingFang SC', 'Segoe UI', sans-serif; }
   :global(button), :global(input), :global(textarea), :global(select) { font-family: inherit; }
+  .window-surface { --muted: var(--ui-secondary); --muted-strong: var(--ui-secondary); --accent: var(--ui-accent); --line: var(--ui-separator); --line-strong: var(--ui-control-border); }
   .app { min-height: 100vh; }
   .topbar { position: sticky; top: 0; z-index: 5; display: flex; align-items: center; justify-content: space-between; gap: 24px; padding: 20px 28px 16px; border-bottom: 1px solid var(--line); background: color-mix(in srgb, var(--bg) 88%, transparent); backdrop-filter: blur(18px); }
   .title-block { min-width: 0; }
@@ -815,9 +819,9 @@
   .topbar p { margin: 0; color: var(--muted); }
   .project-filters { display: flex; align-items: center; flex: 1 1 auto; min-width: 0; max-width: min(680px, 52vw); gap: 5px; overflow-x: auto; scrollbar-width: none; }
   .project-filters::-webkit-scrollbar { display: none; }
-  .project-filters button { flex: none; max-width: 180px; overflow: hidden; border: 1px solid var(--line); border-radius: 999px; background: var(--chip); color: var(--muted-strong); padding: 3px 8px; font: inherit; font-size: 11px; font-weight: 600; line-height: 1.35; cursor: pointer; text-overflow: ellipsis; white-space: nowrap; }
+  .project-filters button { flex: none; max-width: 180px; overflow: hidden; border: 1px solid var(--line); border-radius: 999px; background: var(--chip); color: var(--muted-strong); padding: 3px 8px; font: inherit; font-size: 12px; font-weight: 600; line-height: 1.35; cursor: pointer; text-overflow: ellipsis; white-space: nowrap; }
   .project-filters button:hover { background: var(--hover); }
-  .project-filters button.active { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); }
+  .project-filters button.active { border-color: var(--accent); background: var(--accent-soft); color: var(--ui-accent-text); }
   .top-actions { flex: none; display: flex; align-items: center; gap: 8px; }
   .new-task, .new-idea, .refresh, .settings-button { min-height: 34px; box-sizing: border-box; border-radius: 9px; padding: 7px 10px; font-weight: 650; cursor: pointer; }
   .new-task, .new-idea { display: flex; align-items: center; gap: 7px; }
@@ -829,7 +833,7 @@
   .settings-button { display: flex; align-items: center; gap: 6px; }
   .settings-button svg { width: 15px; height: 15px; }
   .refresh:hover:not(:disabled), .settings-button:hover:not(:disabled) { background: var(--hover); }
-  .settings-button.active { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); }
+  .settings-button.active { border-color: var(--accent); background: var(--accent-soft); color: var(--ui-accent-text); }
   .refresh:disabled, .settings-button:disabled, .new-task:disabled, .new-idea:disabled { opacity: 0.45; cursor: default; }
   .loading { min-height: 60vh; display: grid; place-items: center; color: var(--muted); }
   .content { padding: 22px 28px 48px; }
@@ -852,7 +856,7 @@
   .sort-control:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
   .board-tools button { flex: none; border: 1px solid var(--line); border-radius: 10px; background: var(--card); color: var(--fg); padding: 8px 12px; font-weight: 650; cursor: pointer; }
   .board-tools button:hover { background: var(--hover); }
-  .board-tools button.active { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
+  .board-tools button.active { border-color: var(--accent); color: var(--ui-accent-text); background: var(--accent-soft); }
   .board-scroll { overflow-x: auto; padding: 2px 2px 14px; }
   .board { display: grid; grid-template-columns: repeat(5, minmax(248px, 1fr)); gap: 12px; min-width: 1312px; }
   .lane { min-width: 0; min-height: 420px; margin: 0; padding: 10px; border: 1px solid var(--line); border-radius: 16px; background: color-mix(in srgb, var(--chip) 48%, transparent); transition: border-color 120ms ease, background 120ms ease; }
@@ -865,16 +869,18 @@
   .idea-preview-tip pre { margin: 0; font-family: inherit; font-size: 12.5px; line-height: 1.55; overflow-wrap: anywhere; white-space: pre-wrap; }
   .lane-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 2px 4px 10px; }
   .lane-head h2 { margin: 0; font-size: 13px; letter-spacing: 0.01em; }
-  .lane-head span { min-width: 20px; border-radius: 999px; background: var(--card); color: var(--muted); padding: 2px 7px; text-align: center; font-size: 11px; }
+  .lane-head span { min-width: 20px; border-radius: 999px; background: var(--card); color: var(--muted); padding: 2px 7px; text-align: center; font-size: 12px; }
   .lane-body { display: grid; align-content: start; gap: 8px; min-height: 360px; }
   .empty { margin: 0; padding: 14px 5px; color: var(--muted); font-size: 12px; }
-  .drag-help { margin-top: 8px; color: var(--muted); font-size: 11.5px; }
+  .drag-help { margin-top: 8px; color: var(--muted); font-size: 12px; }
   @media (max-width: 900px) {
     .topbar { gap: 14px; }
     .new-task kbd, .new-idea kbd, .refresh span, .settings-button span { display: none; }
   }
   @media (max-width: 660px) {
-    .topbar { align-items: flex-start; padding: 16px 18px 13px; }
+    .topbar { align-items: flex-start; flex-wrap: wrap; padding: 16px 18px 13px; }
+    .title-block { width: 100%; }
+    .top-actions { flex-wrap: wrap; }
     .topbar p { max-width: 440px; }
     .board-tools { flex-wrap: wrap; }
     .sort-control { flex: 1 1 auto; }

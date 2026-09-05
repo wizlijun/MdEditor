@@ -1,0 +1,67 @@
+@import './popup-menu.css';
+
+/* Shared window chrome, not document typography. Plugins opt in via ui-surface. */
+:root {
+  --ui-font: -apple-system, BlinkMacSystemFont, 'Helvetica Neue', sans-serif;
+  --ui-bg: color-mix(in srgb, CanvasText 3%, Canvas);
+  --ui-surface: Canvas;
+  --ui-secondary: color-mix(in srgb, CanvasText 72%, Canvas);
+  --ui-tertiary: color-mix(in srgb, CanvasText 62%, Canvas);
+  --ui-separator: color-mix(in srgb, CanvasText 16%, Canvas);
+  --ui-control-border: color-mix(in srgb, CanvasText 28%, Canvas);
+  --ui-hover: color-mix(in srgb, CanvasText 6%, Canvas);
+  --ui-selection: color-mix(in srgb, #0064d8 12%, Canvas);
+  --ui-accent: #0064d8;
+  --ui-accent-text: #005bc4;
+  --ui-accent-foreground: #fff;
+  --ui-danger: #b42318;
+  --ui-success: #18713c;
+  --ui-warning: #805400;
+  --ui-focus: #007aff;
+}
+
+.ui-surface {
+  color-scheme: light dark;
+  color: CanvasText;
+  font-family: var(--ui-font);
+  font-size: 13px;
+  line-height: 1.45;
+  min-width: 0;
+}
+.ui-surface :where(button, input, select, textarea) { font: inherit; }
+.ui-surface :where(input, select, textarea) { max-width: 100%; box-sizing: border-box; }
+.ui-surface :where(input[type='checkbox'], input[type='radio'], input[type='range']) { accent-color: var(--ui-accent); }
+/* Beat scoped control resets without removing the browser's pointer behavior. */
+.ui-surface.ui-surface :is(button, input, select, textarea, summary, a, [tabindex]):focus-visible {
+  outline: 3px solid var(--ui-focus);
+  outline-offset: 2px;
+}
+.ui-surface :where(button:disabled, input:disabled, select:disabled, textarea:disabled) { cursor: default; }
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --ui-accent-text: #8abbff;
+    --ui-selection: color-mix(in srgb, #78b4ff 18%, Canvas);
+    --ui-danger: #ff9d96;
+    --ui-success: #85d5a3;
+    --ui-warning: #eabe68;
+    --ui-focus: #8abbff;
+  }
+}
+@media (prefers-contrast: more) {
+  :root { --ui-secondary: CanvasText; --ui-tertiary: CanvasText; --ui-separator: color-mix(in srgb, CanvasText 45%, Canvas); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ui-surface *, .ui-surface *::before, .ui-surface *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    /* Even a tiny visibility transition can reject focus on a just-opened menu. */
+    transition-duration: 0s !important;
+    scroll-behavior: auto !important;
+  }
+}
+@media (forced-colors: active) {
+  :root { --ui-separator: ButtonBorder; --ui-control-border: ButtonBorder; --ui-focus: Highlight; }
+  .ui-surface :where(button, input, select, textarea) { border-color: ButtonBorder; }
+  .ui-surface :where([aria-current='page'], [aria-selected='true']) { outline: 1px solid Highlight; }
+}

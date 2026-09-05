@@ -44,7 +44,7 @@
     background: var(--window-surface, Canvas);
     color: var(--muted-text, currentColor);
     font-family: ui-monospace, SFMono-Regular, monospace;
-    font-size: 11px;
+    font-size: 12px;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -55,12 +55,12 @@
      error, just a boundary doing its job. */
   .perm {
     font-family: ui-monospace, SFMono-Regular, monospace;
-    font-size: 11px;
+    font-size: 12px;
     padding: 2px 0;
-    opacity: 0.9;
+    color: var(--ui-secondary);
   }
-  .p-rejected, .p-cancelled { color: #b58900; }
-  .p-allowed { opacity: 0.7; }
-  .brief { opacity: 0.75; }
-  .text { max-width: 780px; white-space: pre-wrap; padding: 6px 0; }
+  .p-rejected, .p-cancelled { color: var(--ui-warning); }
+  .p-allowed { color: var(--ui-secondary); }
+  .brief { color: var(--ui-secondary); }
+  .text { max-width: 780px; white-space: pre-wrap; overflow-wrap: anywhere; padding: 6px 0; }
 </style>

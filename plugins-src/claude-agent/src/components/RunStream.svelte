@@ -39,12 +39,12 @@
     background: var(--window-surface, Canvas);
     color: var(--muted-text, currentColor);
     font-family: ui-monospace, SFMono-Regular, monospace;
-    font-size: 11px;
+    font-size: 12px;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
   }
   .tname { font-weight: 600; }
-  .brief { opacity: 0.75; }
-  .text { max-width: 780px; white-space: pre-wrap; padding: 6px 0; }
+  .brief { color: var(--ui-secondary); }
+  .text { max-width: 780px; white-space: pre-wrap; overflow-wrap: anywhere; padding: 6px 0; }
 </style>

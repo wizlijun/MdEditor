@@ -40,6 +40,8 @@
      Declares `color-scheme: light dark` so this standalone window follows the
      system appearance (MEMORY reference_webview_color_scheme). -->
 <script lang="ts">
+  import '../../../src/styles/ui-foundation.css'
+  import { modalFocus } from '../../../src/lib/ui/modal-focus'
   import { onMount, tick } from 'svelte'
   import Icon from './components/Icon.svelte'
   import InboxPanel from './components/InboxPanel.svelte'
@@ -159,20 +161,17 @@
     rememberProvider(AGENT_SURFACE, id)
   }
 
+  async function writeSettings(next: TraceState = settings): Promise<void> {
+    await vaultWrite(STATE_PATH, serializeState({ ...next, pendingRuns: { ...next.pendingRuns } }))
+  }
+
   /** Best-effort settings write: losing the memory of a toggle must never
    *  cost the user anything else. (`pendingRuns` rides along — a run that
    *  exists only in memory is lost to a window close, and nothing would ever
    *  reconcile it.) */
   async function persist(): Promise<void> {
     try {
-      await vaultWrite(
-        STATE_PATH,
-        serializeState({
-          traceDir: settings.traceDir,
-          inboxOpen: settings.inboxOpen,
-          pendingRuns: { ...settings.pendingRuns },
-        }),
-      )
+      await writeSettings()
     } catch (e) {
       console.warn('[trace-source] persisting settings failed:', e)
     }
@@ -207,9 +206,12 @@
     return withDocumentLock(async () => {
       if (!(await flushActiveDocument())) return false
       const nextContent = activeDocumentPath ? '' : markdown()
-      settings.traceDir = dir
+      const next = { ...settings, traceDir: dir }
+      // Explicit settings save must acknowledge disk before changing the live
+      // directory. Background presence/toggle persistence remains best effort.
+      await writeSettings(next)
+      settings = next
       await attachComposer(nextContent)
-      await persist()
       if (settings.inboxOpen) void refreshReports()
       return true
     })
@@ -583,11 +585,6 @@
     if (settings.inboxOpen) void refreshReports()
   }
 
-  /** Focuses the agent-missing layer so Esc reaches it (see its `onkeydown`). */
-  function takeFocus(node: HTMLElement) {
-    node.focus()
-  }
-
   onMount(() => {
     let disposed = false
 
@@ -685,7 +682,7 @@
   })
 </script>
 
-<main class="app">
+<main class="app ui-surface">
   {#if needVault}
     <div class="notice">{t('needVault')}</div>
   {:else}
@@ -806,14 +803,7 @@
       aria-modal="true"
       aria-labelledby="agent-missing-title"
       tabindex="-1"
-      use:takeFocus
-      onkeydown={(e) => {
-        if (e.key === 'Escape') {
-          e.preventDefault()
-          e.stopPropagation()
-          agentMissing = false
-        }
-      }}
+      use:modalFocus={{ onClose: () => (agentMissing = false) }}
     >
       <h2 id="agent-missing-title">{t('agentMissing')}</h2>
       <p>{t('agentMissingHint')}</p>
@@ -835,6 +825,8 @@
     color: CanvasText;
   }
   .app {
+    --line: var(--ui-separator);
+    --accent: var(--ui-accent);
     display: flex;
     flex-direction: column;
     height: 100vh;
@@ -910,7 +902,7 @@
     min-width: 0;
   }
   .status.error {
-    color: #dc2626;
+    color: var(--ui-danger);
     opacity: 1;
   }
   /* Icon + text on one line; `min-width: 0` lets the ellipsis engage instead

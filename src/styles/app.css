@@ -1,3 +1,5 @@
+@import './ui-foundation.css';
+
 :root {
   font-family: -apple-system, BlinkMacSystemFont, 'Helvetica Neue', sans-serif;
   font-size: 14px;
@@ -27,57 +29,5 @@ html, body, #app {
 
 /* Editor styles live in editor-base.css and skins/<id>.css. */
 
-/* ── Shared popup chrome: macOS-like floating menus/panels ─────────────────
-   One look for every floating surface (editor context menu, slash menu, note
-   popups): vibrancy blur over a translucent Canvas, hairline border, native
-   accent-colored row highlight. Components add their own layout on top. */
-.menu-panel {
-  background: color-mix(in srgb, Canvas 78%, transparent);
-  -webkit-backdrop-filter: blur(28px) saturate(1.6);
-  backdrop-filter: blur(28px) saturate(1.6);
-  color: CanvasText;
-  border: 0.5px solid color-mix(in srgb, CanvasText 22%, transparent);
-  border-radius: 10px;
-  box-shadow: 0 10px 34px rgba(0, 0, 0, 0.22), 0 1px 3px rgba(0, 0, 0, 0.1);
-  padding: 5px;
-  /* Always the system UI font — menus mounted inside the editor must not
-     inherit the document theme's content font. */
-  font-family: -apple-system, BlinkMacSystemFont, 'Helvetica Neue', sans-serif;
-  font-size: 13px;
-  font-weight: 400;
-}
-.menu-row {
-  display: flex;
-  align-items: center;
-  padding: 3px 9px;
-  border-radius: 5px;
-  user-select: none;
-  white-space: nowrap;
-  cursor: default;
-}
-/* Native menu highlight: accent-blue row, text flips to white — exactly like
-   NSMenu. `AccentColorText` is unreliable in WebKit (text stayed black), so
-   the text color is explicit white; the macOS menu-blue fallback upgrades to
-   the user's accent color where `AccentColor` is actually supported. */
-/* Descendant-of-.menu-panel bumps specificity to (0,3,0) so this reliably wins
-   over components' own item-reset classes like `.node-ctx-item { background: none }`
-   / `.mrow` / `.pmenu-row` (scoped → 0,2,0, injected after app.css). Without the
-   bump those equal-specificity resets clobber the hover highlight. */
-.menu-panel .menu-row.active,
-.menu-panel .menu-row:hover {
-  background: #0a63ff;
-  color: #fff;
-}
-@supports (background: AccentColor) {
-  .menu-panel .menu-row.active,
-  .menu-panel .menu-row:hover {
-    background: AccentColor;
-    color: #fff;
-  }
-}
-.menu-row.disabled { opacity: 0.35; pointer-events: none; }
-.menu-sep {
-  height: 1px;
-  margin: 5px 9px;
-  background: color-mix(in srgb, CanvasText 12%, transparent);
-}
+/* Popup styles remain global through ui-foundation → popup-menu.css. Plugins
+   can share those same rules without importing this window's overflow reset. */

@@ -20,6 +20,7 @@
 
 <div
   class="banner"
+  role="status"
   class:bad={status === null || status?.ok === false}
   class:warn={!!status?.warning}
 >
@@ -73,32 +74,33 @@
     border-radius: 12px;
     background: var(--card-surface, color-mix(in srgb, currentColor 2%, transparent));
     box-shadow: 0 1px 3px color-mix(in srgb, CanvasText 4%, transparent);
-    font-size: 11px;
+    font-size: 12px;
     line-height: 1.4;
   }
-  .banner.bad { border-color: color-mix(in srgb, #d9534f 34%, transparent); background: color-mix(in srgb, #d9534f 7%, Canvas); }
-  .banner.warn { border-color: color-mix(in srgb, #b8860b 34%, transparent); background: color-mix(in srgb, #b8860b 7%, Canvas); }
+  .banner.bad { border-color: color-mix(in srgb, var(--ui-danger) 34%, transparent); background: color-mix(in srgb, var(--ui-danger) 7%, Canvas); }
+  .banner.warn { border-color: color-mix(in srgb, var(--ui-warning) 34%, transparent); background: color-mix(in srgb, var(--ui-warning) 7%, Canvas); }
   .name { font-weight: 650; font-size: 13px; letter-spacing: -0.01em; }
   .ver, .model {
     font-family: ui-monospace, SFMono-Regular, monospace;
-    opacity: 0.8;
+    color: var(--ui-secondary);
+    min-width: 0;
+    overflow-wrap: anywhere;
   }
-  .state { color: #d9534f; font-weight: 600; }
+  .state { color: var(--ui-danger); font-weight: 600; }
   /* The origin can be a long path; it earns a line but not the layout. */
   .origin, .hint {
     flex-basis: 100%;
-    color: var(--muted-text, color-mix(in srgb, CanvasText 58%, transparent));
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+    color: var(--ui-secondary);
+    min-width: 0;
+    overflow-wrap: anywhere;
   }
   .alert {
     margin: 7px 0 4px;
     padding: 7px 9px;
-    border: 1px solid color-mix(in srgb, #b8860b 28%, transparent);
+    border: 1px solid color-mix(in srgb, var(--ui-warning) 28%, transparent);
     border-radius: 9px;
-    background: color-mix(in srgb, #b8860b 8%, Canvas);
-    font-size: 11px;
+    background: color-mix(in srgb, var(--ui-warning) 8%, Canvas);
+    font-size: 12px;
     line-height: 1.45;
   }
 </style>

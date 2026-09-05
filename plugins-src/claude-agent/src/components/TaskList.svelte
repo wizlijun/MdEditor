@@ -61,7 +61,7 @@
   {#each group.tasks as task (task.id)}
     {@const st = status(task)}
     <li>
-      <button class="task-button" class:active={task.id === selected} onclick={() => onselect(task.id)}>
+      <button class="task-button" class:active={task.id === selected} aria-current={task.id === selected ? 'page' : undefined} onclick={() => onselect(task.id)}>
         <span class="name">
           {task.name}
           {#if task.running}<span class="dot" title={label('status.running')}></span>{/if}
@@ -93,7 +93,7 @@
   .chevron { color: var(--muted-text); font-size: 17px; line-height: 1; transition: transform 120ms ease; }
   .group-toggle[aria-expanded='true'] .chevron { transform: rotate(90deg); }
   .group-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 620; }
-  .count { margin-left: auto; color: var(--muted-text); font-size: 10px; font-variant-numeric: tabular-nums; }
+  .count { margin-left: auto; color: var(--muted-text); font-size: 12px; font-variant-numeric: tabular-nums; }
   .tasks { list-style: none; margin: 5px 0 2px 13px; padding: 0; }
   .tasks li + li { margin-top: 4px; }
   .task-button {
@@ -115,21 +115,21 @@
   }
   .task-button.active {
     border-color: color-mix(in srgb, var(--standard-accent, #3479db) 45%, transparent);
-    background: color-mix(in srgb, var(--standard-accent, #3479db) 8%, Canvas);
+    background: var(--ui-selection);
     box-shadow: inset 3px 0 0 var(--standard-accent, #3479db);
   }
   .task-button:focus-visible { outline: 2px solid var(--standard-accent, #3479db); outline-offset: 2px; }
-  .name { display: flex; align-items: center; gap: 6px; font-weight: 650; }
+  .name { min-width: 0; overflow-wrap: anywhere; display: flex; align-items: center; gap: 6px; font-weight: 650; }
   .desc, .state {
     display: block;
-    font-size: 11px;
+    font-size: 12px;
     line-height: 1.35;
     margin-top: 2px;
   }
   .desc { color: var(--muted-text, currentColor); }
   .state { color: var(--muted-text, currentColor); font-variant-numeric: tabular-nums; }
-  .s-error, .s-timeout { color: #d9534f; opacity: 0.9; }
-  .s-running { opacity: 0.95; font-weight: 600; }
+  .s-error, .s-timeout { color: var(--ui-danger); }
+  .s-running { color: var(--ui-secondary); font-weight: 600; }
   .dot {
     width: 7px;
     height: 7px;

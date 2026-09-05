@@ -51,7 +51,7 @@
       <span class="caption" aria-live="polite">{caption}</span>
     </div>
   {/if}
-  <div class="cells" role="group" onpointerleave={() => (hovered = 0)}>
+  <div class="cells" role="group" aria-label={label || caption || undefined} onpointerleave={() => (hovered = 0)}>
     {#each [1, 2, 3, 4, 5] as _b (`b${_b}`)}
       <span class="cell base"></span>
     {/each}
@@ -102,7 +102,7 @@
      the 50% mark → sits above the selectable cells). */
   .head { display: flex; align-items: baseline; min-height: 1.2em; }
   .lbl { flex: 0 0 50%; font-size: 0.8rem; opacity: 0.7; }
-  .req { color: #dc2626; }
+  .req { color: var(--ui-danger); }
   .caption {
     flex: 1 1 50%; font-size: 0.82rem; opacity: 0.78; font-variant-numeric: tabular-nums;
   }

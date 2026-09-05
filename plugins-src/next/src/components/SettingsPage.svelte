@@ -142,7 +142,7 @@
   .setting-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 28px; padding: 18px 0; border-bottom: 1px solid var(--line); }
   .setting-copy { display: grid; gap: 5px; min-width: 0; }
   .setting-copy strong { font-size: 13px; }
-  .setting-copy small { max-width: 470px; color: var(--muted); font-size: 11.5px; line-height: 1.45; }
+  .setting-copy small { max-width: 470px; color: var(--muted); font-size: 12px; line-height: 1.45; }
   input, select { width: 150px; box-sizing: border-box; flex: none; border: 1px solid var(--line-strong); border-radius: 8px; background: var(--input); color: var(--fg); padding: 7px 9px; outline: none; font: inherit; }
   input:focus, select:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
   input:disabled, select:disabled { opacity: 0.55; }

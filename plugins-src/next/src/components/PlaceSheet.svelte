@@ -414,7 +414,7 @@
   .routes button.active { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); background: var(--accent-soft); }
   .routes strong, .routes span { display: block; }
   .routes strong { font-size: 13px; }
-  .routes span { margin-top: 4px; color: var(--muted); font-size: 11px; line-height: 1.35; }
+  .routes span { margin-top: 4px; color: var(--muted); font-size: 12px; line-height: 1.35; }
   form { display: grid; gap: 13px; padding: 18px 24px 22px; border-top: 1px solid var(--line); }
   label { display: grid; gap: 6px; font-size: 12px; font-weight: 600; }
   input, select { width: 100%; box-sizing: border-box; border: 1px solid var(--line-strong); border-radius: 9px; background: var(--input); color: var(--fg); padding: 9px 10px; font: inherit; outline: none; }
@@ -422,17 +422,17 @@
   .project-picker { display: grid; gap: 8px; min-width: 0; margin: 0; padding: 0; border: 0; }
   .project-picker legend { margin-bottom: 2px; padding: 0; font-size: 12px; font-weight: 600; }
   .selected-projects, .project-options { display: flex; flex-wrap: wrap; gap: 6px; }
-  .project-tag { max-width: 100%; overflow: hidden; border: 1px solid var(--line); border-radius: 999px; background: var(--chip); color: var(--muted-strong); padding: 5px 9px; font: inherit; font-size: 11.5px; font-weight: 600; cursor: pointer; text-overflow: ellipsis; white-space: nowrap; }
+  .project-tag { max-width: 100%; overflow: hidden; border: 1px solid var(--line); border-radius: 999px; background: var(--chip); color: var(--muted-strong); padding: 5px 9px; font: inherit; font-size: 12px; font-weight: 600; cursor: pointer; text-overflow: ellipsis; white-space: nowrap; }
   .project-tag:hover { background: var(--hover); }
-  .project-tag.selected { display: inline-flex; align-items: center; gap: 5px; border-color: var(--accent); background: var(--accent-soft); color: var(--accent); }
+  .project-tag.selected { display: inline-flex; align-items: center; gap: 5px; border-color: var(--accent); background: var(--accent-soft); color: var(--ui-accent-text); }
   .project-create { display: grid; grid-template-columns: 1fr auto; gap: 7px; }
   .project-create button { border: 1px solid var(--line-strong); border-radius: 9px; background: var(--card); color: var(--fg); padding: 7px 12px; font: inherit; font-weight: 650; cursor: pointer; }
   .project-create button:hover:not(:disabled) { background: var(--hover); }
   .project-create button:disabled { opacity: 0.45; cursor: default; }
-  .project-picker small { color: var(--muted); font-size: 11px; font-weight: 400; }
+  .project-picker small { color: var(--muted); font-size: 12px; font-weight: 400; }
   .split { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
   .error { margin: 0; color: var(--danger); font-size: 12px; }
-  .help { margin-top: -7px; color: var(--muted); font-size: 11px; line-height: 1.45; }
+  .help { margin-top: -7px; color: var(--muted); font-size: 12px; line-height: 1.45; }
   footer { display: flex; justify-content: flex-end; gap: 8px; padding-top: 4px; }
   footer button { border-radius: 9px; padding: 8px 14px; font: inherit; font-weight: 650; cursor: pointer; }
   footer button:disabled { opacity: 0.45; cursor: default; }

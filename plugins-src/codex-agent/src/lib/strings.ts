@@ -2,6 +2,18 @@
 // host's i18n. Missing keys fall back to English.
 
 export type MessageKey =
+  | 'history.loading'
+  | 'settings.autosave'
+  | 'settings.loading'
+  | 'settings.saving'
+  | 'settings.saved'
+  | 'settings.retry'
+  | 'history.actions'
+  | 'history.cancel'
+  | 'history.confirmDelete'
+  | 'history.confirmClear'
+  | 'history.confirmHint'
+  | 'history.deleting'
   | 'run.addendum'
   | 'run.addendum.placeholder'
   | 'run.willRun'
@@ -71,6 +83,18 @@ export type MessageKey =
 type Catalog = Record<MessageKey, string>
 
 const en: Catalog = {
+  'history.loading': "Loading run log…",
+  'settings.autosave': "Changes are saved automatically.",
+  'settings.loading': "Loading settings…",
+  'settings.saving': "Saving…",
+  'settings.saved': "Saved",
+  'settings.retry': "Reload settings",
+  'history.actions': "Run actions",
+  'history.cancel': "Cancel",
+  'history.confirmDelete': "Delete this run?",
+  'history.confirmClear': "Clear all run history?",
+  'history.confirmHint': "This removes the saved run record and log. This cannot be undone.",
+  'history.deleting': "Deleting…",
   'run.addendum': 'Add to this run (optional)',
   'run.addendum.placeholder': 'e.g. only the questions about performance',
   'run.willRun': 'Will run',
@@ -140,6 +164,18 @@ const en: Catalog = {
 }
 
 const zh: Catalog = {
+  'history.loading': "正在加载运行日志…",
+  'settings.autosave': "修改后自动保存。",
+  'settings.loading': "正在加载设置…",
+  'settings.saving': "正在保存…",
+  'settings.saved': "已保存",
+  'settings.retry': "重新加载设置",
+  'history.actions': "运行记录操作",
+  'history.cancel': "取消",
+  'history.confirmDelete': "删除这次运行记录？",
+  'history.confirmClear': "清空全部运行历史？",
+  'history.confirmHint': "将删除保存的运行记录和日志，无法撤销。",
+  'history.deleting': "正在删除…",
   'run.addendum': '本次补充要求(可选)',
   'run.addendum.placeholder': '例:只回答与性能有关的问题',
   'run.willRun': '将运行',
@@ -209,6 +245,18 @@ const zh: Catalog = {
 }
 
 const ja: Catalog = {
+  'history.loading': "実行ログを読み込み中…",
+  'settings.autosave': "変更は自動で保存されます。",
+  'settings.loading': "設定を読み込み中…",
+  'settings.saving': "保存中…",
+  'settings.saved': "保存しました",
+  'settings.retry': "設定を再読み込み",
+  'history.actions': "実行履歴の操作",
+  'history.cancel': "キャンセル",
+  'history.confirmDelete': "この実行履歴を削除しますか？",
+  'history.confirmClear': "すべての実行履歴を削除しますか？",
+  'history.confirmHint': "保存済みの実行記録とログを削除します。この操作は取り消せません。",
+  'history.deleting': "削除中…",
   'run.addendum': '今回の追加指示(任意)',
   'run.addendum.placeholder': '例:性能に関する質問だけ',
   'run.willRun': '実行内容',
@@ -278,6 +326,18 @@ const ja: Catalog = {
 }
 
 const de: Catalog = {
+  'history.loading': "Laufprotokoll wird geladen…",
+  'settings.autosave': "Änderungen werden automatisch gespeichert.",
+  'settings.loading': "Einstellungen werden geladen…",
+  'settings.saving': "Wird gespeichert…",
+  'settings.saved': "Gespeichert",
+  'settings.retry': "Einstellungen neu laden",
+  'history.actions': "Aktionen für diesen Lauf",
+  'history.cancel': "Abbrechen",
+  'history.confirmDelete': "Diesen Lauf löschen?",
+  'history.confirmClear': "Gesamten Verlauf löschen?",
+  'history.confirmHint': "Gespeicherte Laufdaten und Protokolle werden unwiderruflich gelöscht.",
+  'history.deleting': "Wird gelöscht…",
   'run.addendum': 'Für diesen Lauf ergänzen (optional)',
   'run.addendum.placeholder': 'z. B. nur die Fragen zur Performance',
   'run.willRun': 'Läuft',

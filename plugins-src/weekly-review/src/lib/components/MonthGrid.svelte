@@ -46,7 +46,7 @@
   .wm { position: absolute; right: 0; top: 8px; font-size: 44px; font-weight: 800; color: var(--wm); z-index: 0; pointer-events: none; letter-spacing: -2px; }
   .mtitle { font-weight: 700; font-size: 12px; margin: 0 0 2px 2px; position: relative; z-index: 1; }
   .dow { display: grid; grid-template-columns: repeat(7, 1fr); position: relative; z-index: 1; }
-  .dow span { text-align: center; font-size: 9px; color: var(--muted); font-weight: 600; }
+  .dow span { text-align: center; font-size: 12px; color: var(--muted); font-weight: 600; }
   .dow span.we { color: var(--weekend); }
   .weeks { position: relative; z-index: 1; display: flex; flex-direction: column; gap: 2px; flex: 1 1 auto; min-height: 0; }
 </style>

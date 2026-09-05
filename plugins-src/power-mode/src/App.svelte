@@ -1,4 +1,5 @@
 <script lang="ts">
+  import '../../../src/styles/ui-foundation.css'
   import { onMount, onDestroy } from 'svelte'
   import { bridge, loadPowerMode, savePowerMode, type SurfaceEntry } from './lib/bridge'
   import { normalizeConfig, DEFAULT_CONFIG, PRESET_IDS } from './lib/config'
@@ -16,6 +17,7 @@
   let kitFailed = $state(false)
   let saveTimer: ReturnType<typeof setTimeout> | undefined
   let error = $state<string | null>(null)
+  let saveError = $state(false)
 
   function surfaceLabel(s: SurfaceEntry): string {
     return s.names[locale] ?? s.names[locale.split('-')[0] ?? ''] ?? s.name
@@ -35,8 +37,10 @@
       try {
         await savePowerMode($state.snapshot(cfg))
         error = null
+        saveError = false
       } catch (e) {
         error = `${t('saveFailed')}: ${String(e)}`
+        saveError = true
       }
     }, 300)
   }
@@ -101,10 +105,15 @@
   })
 </script>
 
-<main>
+<main class="ui-surface">
   <h1>{t('title')}</h1>
 
-  {#if error}<p class="error">{error}</p>{/if}
+  {#if error}
+    <div class="error" role="alert">
+      <p>{error}</p>
+      {#if saveError}<button type="button" onclick={touched}>{t('retry')}</button>{/if}
+    </div>
+  {/if}
 
   <section>
     <h2>{t('surfaces.section')}</h2>
@@ -145,10 +154,10 @@
     </label>
     <div class="row indent">
       <span>{t('shake.intensity')}</span>
-      <div class="seg" role="group">
+      <div class="seg" role="group" aria-label={t('shake.intensity')}>
         {#each SHAKE_LEVELS as l (l.key)}
           <button type="button" class="seg-btn" class:on={cfg.shake.intensity === l.intensity}
-                  disabled={!cfg.shake.enable} onclick={() => setShakeLevel(l)}>
+                  aria-pressed={cfg.shake.intensity === l.intensity} disabled={!cfg.shake.enable} onclick={() => setShakeLevel(l)}>
             {t(`shake.level.${l.key}` as MessageKey)}
           </button>
         {/each}
@@ -161,10 +170,10 @@
     </label>
     <div class="row indent">
       <span>{t('combo.timeout')}</span>
-      <div class="seg" role="group">
+      <div class="seg" role="group" aria-label={t('combo.timeout')}>
         {#each COMBO_TIMEOUTS as o (o.key)}
           <button type="button" class="seg-btn" class:on={cfg.combo.timeout === o.seconds}
-                  disabled={!cfg.combo.enable} onclick={() => setComboTimeout(o.seconds)}>
+                  aria-pressed={cfg.combo.timeout === o.seconds} disabled={!cfg.combo.enable} onclick={() => setComboTimeout(o.seconds)}>
             {t(`combo.timeout.${o.key}` as MessageKey)}
           </button>
         {/each}
@@ -204,15 +213,15 @@
     flex-direction: column;
     gap: 18px;
     padding: 18px 20px;
-    height: 100vh;
+    min-height: 100vh;
     box-sizing: border-box;
   }
   h1 { font-size: 17px; margin: 0; }
-  h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; opacity: .6; margin: 0 0 8px; }
+  h2 { font-size: 13px; color: var(--ui-secondary); margin: 0 0 8px; }
   section { display: flex; flex-direction: column; }
-  .row { display: flex; align-items: center; gap: 8px; padding: 3px 0; }
+  .row { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 5px 0; }
   .row.indent { padding-left: 22px; }
-  .row span { flex: 0 0 auto; }
+  .row span { min-width: 0; overflow-wrap: anywhere; }
 
   /* 分段选择器:三档强度 / 三档超时。 */
   .seg { display: inline-flex; margin-left: auto; border-radius: 6px; overflow: hidden;
@@ -226,14 +235,15 @@
   .seg-btn.on { background: color-mix(in srgb, currentColor 16%, transparent); font-weight: 600; }
   .seg-btn:disabled { opacity: .4; cursor: default; }
 
-  .hint { margin: 4px 0 0; opacity: .55; font-size: 12px; }
+  .hint { margin: 4px 0 0; color: var(--ui-secondary); font-size: 12px; }
   .hint.indent { padding-left: 22px; }
-  .error { color: #d33; margin: 0; }
+  .error { color: var(--ui-danger); margin: 0; overflow-wrap: anywhere; }
+  .error p { margin: 0 0 6px; }
 
   /* Kit 要求容器有确定高度:content-sized 容器下 source 模式会塌成 0。 */
   .demo { flex: 1; min-height: 0; }
   .demo-host {
-    flex: 1;
+    flex: 1 0 180px;
     min-height: 180px;
     border: 1px solid color-mix(in srgb, currentColor 18%, transparent);
     border-radius: 6px;

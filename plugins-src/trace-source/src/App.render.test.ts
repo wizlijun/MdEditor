@@ -45,6 +45,43 @@ async function settle(): Promise<void> {
 }
 
 describe('Trace Source inbox editing', () => {
+  it('keeps a rejected directory draft open without changing the composer, then retries', async () => {
+    let refuseSettings = true
+    const request = vi.fn(async (method: string, params?: { path?: string; content?: string }) => {
+      if (method === 'host.vault.info') return { root: '/vault', wiki_dir: null, daily_dir: null }
+      if (method === 'host.vault.read') throw new Error('first run')
+      if (method === 'host.agent.providers') return { providers: [] }
+      if (method === 'host.vault.list') return { entries: [] }
+      if (method === 'host.vault.write') {
+        if (refuseSettings && params?.path === '.notemd/trace-source.json') throw new Error('settings write refused')
+        return { ok: true }
+      }
+      return {}
+    })
+    window.notemd = { pluginId: 'notemd.trace-source', locale: 'zh', theme: 'system', request, onMessage: () => {} }
+    const { default: App } = await import('./App.svelte')
+    component = mount(App, { target: document.body })
+    flushSync()
+    await vi.waitFor(() => expect(kit.mount).toHaveBeenCalled())
+    kit.edit('保留正在编写的溯源内容')
+    document.querySelector<HTMLButtonElement>('button[aria-label="设置"]')!.click()
+    await settle()
+    const field = document.querySelector<HTMLInputElement>('#trace-dir')!
+    field.value = 'inbox/new-traces'
+    field.dispatchEvent(new Event('input', { bubbles: true }))
+    await settle()
+    document.querySelector<HTMLButtonElement>('.popover .primary')!.click()
+    await vi.waitFor(() => expect(document.querySelector('.popover [role="alert"]')?.textContent).toContain('settings write refused'))
+    expect(field.value).toBe('inbox/new-traces')
+    expect(kit.markdown()).toBe('保留正在编写的溯源内容')
+    refuseSettings = false
+    document.querySelector<HTMLButtonElement>('.popover .primary')!.click()
+    await vi.waitFor(() => expect(document.querySelector('.popover')).toBeNull())
+    expect(kit.markdown()).toBe('保留正在编写的溯源内容')
+    document.querySelector<HTMLButtonElement>('button[aria-pressed]')!.click()
+    await vi.waitFor(() => expect(request.mock.calls).toContainEqual(['host.vault.list', { path: 'inbox/new-traces' }]))
+  })
+
   it('点击完成报告会在插件自身编辑区打开并写回,不会调用主编辑器', async () => {
     const name = '2026-08-18-143012-source-trace.md'
     const reportPath = `inbox/traces/${name}`

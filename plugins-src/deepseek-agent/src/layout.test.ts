@@ -21,7 +21,7 @@ describe('agent workspace layout contract', () => {
   it('splits history rows into readable primary and metadata lines', () => {
     expect(historySource).toContain('class="row-top"')
     expect(historySource).toContain('class="row-meta"')
-    expect(historySource).toContain('aria-pressed={run.run_id === selectedId}')
+    expect(historySource).toContain("aria-current={run.run_id === selectedId ? 'page' : undefined}")
     expect(historySource).toContain('runs.slice(0, visibleCount)')
     expect(historySource).toContain('<span class="task">{run.task}</span>')
     expect(historySource).not.toContain('scopeKey')

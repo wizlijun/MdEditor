@@ -11,7 +11,7 @@ export type MessageKey =
   | 'combo.precisionInput.hint'
   | 'combo.timeout.short' | 'combo.timeout.medium' | 'combo.timeout.long'
   | 'demo.section' | 'demo.hint' | 'demo.sample' | 'demo.unavailable'
-  | 'saveFailed'
+  | 'saveFailed' | 'retry'
 
 type Catalog = Record<MessageKey, string>
 
@@ -45,6 +45,7 @@ const en: Catalog = {
   'demo.sample': 'Type something and watch the sparks fly.',
   'demo.unavailable': 'The live preview needs a newer version of note.md.',
   saveFailed: 'Could not save settings',
+  retry: 'Retry save',
 }
 
 const zh: Catalog = {
@@ -77,6 +78,7 @@ const zh: Catalog = {
   'demo.sample': '敲点什么,看看火花。',
   'demo.unavailable': '实操区需要更新版本的 note.md。',
   saveFailed: '设置保存失败',
+  retry: '重新保存',
 }
 
 const ja: Catalog = {
@@ -109,6 +111,7 @@ const ja: Catalog = {
   'demo.sample': '何か入力して火花を見てみましょう。',
   'demo.unavailable': 'ライブプレビューには新しいバージョンの note.md が必要です。',
   saveFailed: '設定を保存できませんでした',
+  retry: '保存を再試行',
 }
 
 const de: Catalog = {
@@ -141,6 +144,7 @@ const de: Catalog = {
   'demo.sample': 'Tippe etwas und sieh die Funken fliegen.',
   'demo.unavailable': 'Die Live-Vorschau benötigt eine neuere Version von note.md.',
   saveFailed: 'Einstellungen konnten nicht gespeichert werden',
+  retry: 'Erneut speichern',
 }
 
 export const CATALOGS = { en, zh, ja, de } as const

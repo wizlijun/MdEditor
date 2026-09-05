@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { modalFocus } from '../../../../src/lib/ui/modal-focus'
   import {
     cloneTopics,
     createTopic,
@@ -102,18 +103,18 @@
 
 {#if open}
   <div class="backdrop">
-    <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="topic-manager-title">
+    <div class="sheet" role="dialog" aria-modal="true" aria-busy={saving} aria-labelledby="topic-manager-title" use:modalFocus={{ onClose: onclose, canClose: () => !saving }}>
       <header>
         <div>
           <h2 id="topic-manager-title">{t('topic.manager.title')}</h2>
           <p>{t('topic.manager.hint')}</p>
         </div>
-        <button type="button" class="quiet" onclick={onclose} aria-label={t('topic.manager.close')}>{t('topic.manager.close')}</button>
+        <button type="button" class="quiet" disabled={saving} onclick={onclose} aria-label={t('topic.manager.close')}>{t('topic.manager.close')}</button>
       </header>
 
       <div class="topic-list">
         {#each drafts as topic, topicIndex (topic)}
-          <fieldset>
+          <fieldset disabled={saving}>
             <legend>
               <span>{topic.label || t('topic.manager.newTopic', { number: topicIndex + 1 })}</span>
               <span class="book-count">{t('topic.bookCount', { count: topicCount(counts, topic.id) })}</span>
@@ -257,15 +258,15 @@
         <button
           type="button"
           class="add"
-          disabled={drafts.length >= MAX_TOPICS}
+          disabled={saving || drafts.length >= MAX_TOPICS}
           onclick={() => (drafts = createTopic(drafts))}
         >{t('topic.manager.add')}</button>
         <span class="limit">{drafts.length} / {MAX_TOPICS}</span>
         {#if !validation.valid}
           <span class="summary-error">{t('topic.manager.fix')}</span>
         {/if}
-        {#if actionError}<span class="summary-error">{actionError}</span>{/if}
-        <button type="button" class="quiet" onclick={onclose}>{t('action.cancel')}</button>
+        {#if actionError}<span class="summary-error" role="alert">{actionError}</span>{/if}
+        <button type="button" class="quiet" disabled={saving} onclick={onclose}>{t('action.cancel')}</button>
         <button type="button" class="primary" disabled={!validation.valid || saving} onclick={save}>
           {saving ? t('topic.manager.saving') : t('settings.save')}
         </button>
@@ -306,6 +307,7 @@
   }
   footer {
     border-top: 1px solid color-mix(in srgb, currentColor 12%, transparent);
+    flex-wrap: wrap;
   }
   h2,
   p {
@@ -316,8 +318,8 @@
   }
   header p {
     margin-top: 2px;
-    font-size: 10px;
-    opacity: 0.55;
+    font-size: 12px;
+    color: var(--ui-secondary);
   }
   button,
   input,
@@ -362,9 +364,9 @@
     font-weight: 650;
   }
   .book-count {
-    font-size: 10px;
+    font-size: 12px;
     font-weight: 400;
-    opacity: 0.55;
+    color: var(--ui-secondary);
   }
   .order-actions {
     position: absolute;
@@ -379,7 +381,7 @@
     gap: 4px;
   }
   .fields.two-column {
-    grid-template-columns: 1fr 1.5fr;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1.5fr);
     gap: 9px;
   }
   fieldset > label,
@@ -388,7 +390,7 @@
   }
   label > span,
   .vocabulary-head > span {
-    font-size: 10px;
+    font-size: 12px;
     opacity: 0.65;
   }
   input,
@@ -401,7 +403,7 @@
     border: 1px solid color-mix(in srgb, currentColor 22%, transparent);
     border-radius: 5px;
     background: color-mix(in srgb, currentColor 3%, transparent);
-    font-size: 11px;
+    font-size: 12px;
   }
   textarea {
     resize: vertical;
@@ -414,8 +416,9 @@
   }
   .field-error,
   .summary-error {
-    color: #c62828;
-    font-size: 10px;
+    color: var(--ui-danger);
+    overflow-wrap: anywhere;
+    font-size: 12px;
   }
   .vocabulary-head,
   .delete-row {
@@ -440,7 +443,7 @@
     border: 1px solid color-mix(in srgb, currentColor 18%, transparent);
     border-radius: 5px;
     background: transparent;
-    font-size: 10px;
+    font-size: 12px;
   }
   .delete-row {
     margin-top: 11px;
@@ -462,8 +465,8 @@
     border: 1px solid color-mix(in srgb, #c62828 45%, transparent);
     border-radius: 5px;
     background: transparent;
-    color: #c62828;
-    font-size: 10px;
+    color: var(--ui-danger);
+    font-size: 12px;
   }
   .danger:hover:not(:disabled) {
     background: #c62828;
@@ -473,15 +476,20 @@
     padding: 5px 12px;
     border: none;
     border-radius: 6px;
-    background: var(--accent-color, #0a84ff);
+    background: var(--ui-accent);
     color: #fff;
   }
   footer .limit {
-    font-size: 10px;
-    opacity: 0.5;
+    font-size: 12px;
+    color: var(--ui-secondary);
   }
   footer .summary-error:first-of-type {
     margin-left: auto;
+  }
+  @media (max-width: 560px) {
+    .fields.two-column, .vocabulary-row { grid-template-columns: minmax(0, 1fr); }
+    .order-actions { position: static; justify-content: flex-end; margin-bottom: 8px; }
+    .migration, .delete-row { flex-wrap: wrap; }
   }
   .sr-only {
     position: absolute;

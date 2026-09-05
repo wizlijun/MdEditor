@@ -8,6 +8,7 @@
      (design review §1.5). A downgrade shows a coach-tone line, never a red
      failure. The done screen gently mentions sunk (downgraded) items. -->
 <script lang="ts">
+  import { modalFocus } from '../../../../src/lib/ui/modal-focus'
   import type { OpenDecision, SkipReason } from '../lib/model'
   import { state as store, doSkip, refresh } from '../lib/store.svelte'
   import VerdictSheet from './VerdictSheet.svelte'
@@ -31,6 +32,7 @@
   let askReason = $state(false) // skip pressed → show the three reasons
   let downgradedNote = $state('') // coach-tone line shown after an avoid-skip triggers a downgrade
   let busy = $state(false)
+  let error = $state('')
 
   const current = $derived(queue[index] ?? null)
   const sunkCount = $derived(store.archived.filter((a) => a.status === 'downgraded').length)
@@ -58,6 +60,7 @@
   async function skipWith(reason: SkipReason) {
     if (!current || busy) return
     busy = true
+    error = ''
     try {
       const downgraded = await doSkip(current.id, reason, today)
       if (downgraded) {
@@ -68,21 +71,22 @@
         return
       }
     } catch (e) {
-      console.error('[decision-log] skip failed:', e)
+      error = String(e)
+      busy = false
+      return
     }
     busy = false
     await advance()
   }
 </script>
 
-<svelte:window onkeydown={(e) => { if (e.key === 'Escape' && !showVerdict) onClose() }} />
-
 <div class="overlay" role="presentation">
-  <div class="pass" role="dialog" aria-modal="true" tabindex="-1">
+  <div class="pass" role="dialog" aria-modal="true" aria-busy={busy} aria-label={t('review.title')} tabindex="-1" use:modalFocus={{ onClose: () => void onClose(), canClose: () => !showVerdict && !busy }}>
     <header class="pass-head">
       <span class="ttl">{t('review.title')}</span>
       <span class="progress">{index + 1} {t('review.of')} {queue.length}</span>
     </header>
+    {#if error}<p class="error" role="alert">{error}</p>{/if}
 
     {#if current}
       <div class="focus">
@@ -122,6 +126,7 @@
 {/if}
 
 <style>
+  .error { color: var(--ui-danger); overflow-wrap: anywhere; }
   .overlay {
     position: fixed; inset: 0; background: rgba(0, 0, 0, 0.5);
     display: flex; align-items: center; justify-content: center; padding: 1rem; z-index: 45;

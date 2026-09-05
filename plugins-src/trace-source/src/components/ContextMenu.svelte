@@ -159,7 +159,7 @@
 
 <div
   bind:this={el}
-  class="menu"
+  class="menu menu-panel"
   role="menu"
   aria-label={label}
   aria-orientation="vertical"
@@ -174,6 +174,7 @@
     <button
       type="button"
       role="menuitem"
+      class="menu-row"
       tabindex="-1"
       class:danger={item.danger}
       disabled={item.disabled}
@@ -196,12 +197,6 @@
     position: fixed;
     z-index: 30;
     min-width: 180px;
-    padding: 4px;
-    border: 1px solid var(--line, #e5e7eb);
-    border-radius: 8px;
-    background: Canvas;
-    color: CanvasText;
-    box-shadow: 0 8px 24px rgb(0 0 0 / 0.18);
   }
   .menu:focus { outline: none; }
   button {
@@ -222,11 +217,6 @@
     white-space: nowrap;
     cursor: pointer;
   }
-  button:hover:not(:disabled),
-  button:focus-visible {
-    background: color-mix(in srgb, currentColor 12%, transparent);
-    outline: none;
-  }
   button:disabled { opacity: 0.45; cursor: default; }
   /* Fixed 16px column, held open even for an item without an icon. Every item
      this window builds today does have one, so nothing currently depends on
@@ -241,9 +231,7 @@
     justify-content: center;
     height: 16px;
   }
-  .danger { color: #dc2626; }
-  .danger:hover:not(:disabled),
-  .danger:focus-visible { background: color-mix(in srgb, #dc2626 14%, transparent); }
+  .danger { color: var(--ui-danger); }
   .sep {
     height: 1px;
     margin: 4px 2px;

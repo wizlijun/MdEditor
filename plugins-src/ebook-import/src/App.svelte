@@ -1,4 +1,6 @@
 <script lang="ts">
+  import '../../../src/styles/ui-foundation.css'
+  import { modalFocus } from '../../../src/lib/ui/modal-focus'
   import { bridge, vaultExists } from './lib/bridge'
   import AgentPicker from './lib/agent-picker/AgentPicker.svelte'
   import LibraryPanel from './components/LibraryPanel.svelte'
@@ -133,6 +135,8 @@
   let unsafeTopicBooks = $state<string[]>([])
   let topicAgentRunning = $state(false)
   let topicProposal: TopicProposal | null = $state(null)
+  let proposalApplying = $state(false)
+  let proposalError = $state('')
   let topicClassificationRunning = $state(false)
   let classificationProposal: TopicClassificationProposal | null = $state(null)
   let classificationExpectedBooks: string[] = $state([])
@@ -338,6 +342,7 @@
   }
 
   async function saveSettings() {
+    if (saving) return
     saving = true
     globalError = ''
     try {
@@ -556,13 +561,17 @@
   }
 
   async function applyTopicProposal() {
-    if (!topicProposal) return
+    if (!topicProposal || proposalApplying) return
+    proposalApplying = true
+    proposalError = ''
     try {
       await bridge().request('plugin.topic_agent_apply', { proposal: topicProposal })
       topicProposal = null
       await Promise.all([loadTopics(), loadLibrary()])
     } catch (e) {
-      globalError = message(e)
+      proposalError = message(e)
+    } finally {
+      proposalApplying = false
     }
   }
 
@@ -729,24 +738,24 @@
      push (Task 1): this isolated webview's own OS-level drag-drop handling
      swallows native HTML5 dragenter/dragleave/drop before they reach the
      DOM, so there are deliberately no ondragenter/ondragover handlers here. -->
-<main class:drag={dragActive}>
+<main class="ui-surface" class:drag={dragActive}>
   <header>
     <h1>{t('title')}</h1>
-    <button class="link" onclick={() => (settingsOpen = !settingsOpen)}>
+    <button class="link" disabled={saving} aria-expanded={settingsOpen} aria-controls="ebook-settings" onclick={() => (settingsOpen = !settingsOpen)}>
       {t('settings.toggle')} {settingsOpen ? '▲' : '▼'}
     </button>
   </header>
 
   {#if globalError}
     {@const desc = describeError(globalError)}
-    <p class="error banner">
+    <p class="error banner" role="alert">
       {desc.text}
       {#if desc.detail}<span class="detail">{desc.detail}</span>{/if}
     </p>
   {/if}
 
   {#if settingsOpen}
-    <section class="settings">
+    <fieldset class="settings" id="ebook-settings" disabled={saving} aria-label={t('settings.toggle')} aria-busy={saving}>
       <label>
         {t('settings.root')}
         <input type="text" bind:value={ebooksRoot} />
@@ -816,10 +825,10 @@
       </div>
 
       <div class="save-row">
-        <button class="primary" onclick={saveSettings} disabled={saving}>{t('settings.save')}</button>
-        {#if savedFlash}<span class="ok">✓</span>{/if}
+        <button class="primary" onclick={saveSettings} disabled={saving}>{saving ? t('topic.manager.saving') : t('settings.save')}</button>
+        {#if savedFlash}<span class="ok" role="status">✓ {t('settings.saved')}</span>{/if}
       </div>
-    </section>
+    </fieldset>
   {/if}
 
   <TopicBar
@@ -1040,9 +1049,10 @@
 
   {#if topicProposal}
     <div class="proposal-backdrop">
-      <div class="proposal" role="dialog" aria-modal="true" aria-labelledby="proposal-title">
+      <div class="proposal" role="dialog" aria-modal="true" aria-busy={proposalApplying} aria-labelledby="proposal-title" use:modalFocus={{ onClose: () => (topicProposal = null), canClose: () => !proposalApplying }}>
         <h2 id="proposal-title">{t('topic.proposalTitle')}</h2>
         <p>{t('topic.proposalHint')}</p>
+        {#if proposalError}<p class="error" role="alert">{proposalError}</p>{/if}
         <div class="proposal-topics">
           {#each topicProposal.topics as topic (topic.id)}
             <article>
@@ -1057,8 +1067,8 @@
           {/each}
         </div>
         <div class="proposal-actions">
-          <button class="secondary" onclick={() => (topicProposal = null)}>{t('action.cancel')}</button>
-          <button class="primary" onclick={applyTopicProposal}>{t('topic.applyProposal')}</button>
+          <button class="secondary" disabled={proposalApplying} onclick={() => (topicProposal = null)}>{t('action.cancel')}</button>
+          <button class="primary" disabled={proposalApplying} onclick={applyTopicProposal}>{proposalApplying ? t('topic.manager.saving') : t('topic.applyProposal')}</button>
         </div>
       </div>
     </div>
@@ -1106,12 +1116,12 @@
     opacity: 1;
   }
   button.primary {
-    background: color-mix(in srgb, currentColor 12%, transparent);
-    border: 1px solid color-mix(in srgb, currentColor 30%, transparent);
+    background: var(--ui-accent);
+    border: 1px solid transparent;
     border-radius: 6px;
     padding: 5px 14px;
     font-weight: 600;
-    color: inherit;
+    color: white;
   }
   button.secondary {
     background: transparent;
@@ -1125,6 +1135,8 @@
     cursor: default;
   }
   .settings {
+    min-width: 0;
+    margin: 0;
     display: flex;
     flex-direction: column;
     gap: 8px;
@@ -1136,8 +1148,7 @@
     display: flex;
     flex-direction: column;
     gap: 3px;
-    font-size: 11px;
-    opacity: 0.8;
+    font-size: 12px;
   }
   .settings input,
   .settings select {
@@ -1151,12 +1162,14 @@
   }
   .field-hint {
     margin: 0;
-    font-size: 11px;
+    font-size: 12px;
     line-height: 1.5;
-    opacity: 0.55;
+    color: var(--ui-secondary);
   }
   .calibre-row {
     display: flex;
+    flex-wrap: wrap;
+    overflow-wrap: anywhere;
     align-items: center;
     gap: 10px;
     font-size: 12px;
@@ -1192,11 +1205,10 @@
   /* The file behind the row — the point of "the prompt is a file you own". */
   .prompt .path {
     margin-left: auto;
-    font-size: 10px;
-    opacity: 0.55;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
+    font-size: 12px;
+    color: var(--ui-secondary);
+    overflow-wrap: anywhere;
+    min-width: 0;
   }
   .dropzone {
     display: flex;
@@ -1223,6 +1235,7 @@
   }
   .ocr {
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
     gap: 10px;
     font-size: 12px;
@@ -1242,12 +1255,12 @@
     padding: 3px 6px;
   }
   .ocr .hint {
-    opacity: 0.5;
-    font-size: 11px;
+    color: var(--ui-secondary);
+    font-size: 12px;
   }
   /* Warmer than .hint: spending money should register, without alarming. */
   .ocr .cost {
-    font-size: 11px;
+    font-size: 12px;
     padding: 1px 7px;
     border-radius: 9px;
     color: #8a5a00;
@@ -1277,7 +1290,7 @@
   .queue-head .spacer { flex: 1; }
   .start { padding: 4px 16px; }
   .empty {
-    opacity: 0.5;
+    color: var(--ui-secondary);
     font-size: 12px;
     text-align: center;
     padding: 16px 0;
@@ -1308,7 +1321,7 @@
     font-size: 12px;
   }
   .badge {
-    font-size: 10px;
+    font-size: 12px;
     letter-spacing: 0.02em;
     padding: 2px 7px;
     border-radius: 10px;
@@ -1317,32 +1330,34 @@
     flex: none;
   }
   .badge.done {
-    color: #2e7d32;
+    color: var(--ui-success);
   }
   .badge.failed {
-    color: #c62828;
+    color: var(--ui-danger);
   }
   .badge.failed.cancelled {
     color: inherit;
     opacity: 0.6;
   }
   .badge.running {
-    color: #1565c0;
+    color: var(--ui-accent-text);
   }
   .stage {
-    font-size: 10px;
+    font-size: 12px;
     opacity: 0.55;
     flex: none;
   }
   .dest {
     margin: 2px 0 0 22px;
-    font-size: 11px;
-    opacity: 0.6;
+    font-size: 12px;
+    color: var(--ui-secondary);
+    overflow-wrap: anywhere;
   }
   p.error {
     margin: 2px 0 0 22px;
-    font-size: 11px;
-    color: #c62828;
+    font-size: 12px;
+    color: var(--ui-danger);
+    overflow-wrap: anywhere;
   }
   p.error.banner {
     margin: 0;
@@ -1353,7 +1368,7 @@
   .detail {
     display: block;
     margin-top: 2px;
-    font-size: 10px;
+    font-size: 12px;
     opacity: 0.65;
   }
   .log {
@@ -1361,16 +1376,16 @@
     padding: 6px 8px;
     max-height: 160px;
     overflow: auto;
-    font-size: 11px;
+    font-size: 12px;
     background: color-mix(in srgb, currentColor 6%, transparent);
     border-radius: 6px;
     white-space: pre-wrap;
   }
   .ok {
-    color: #2e7d32;
+    color: var(--ui-success);
   }
   .err {
-    color: #c62828;
+    color: var(--ui-danger);
   }
   .topic-actions {
     display: flex;
@@ -1379,24 +1394,24 @@
     margin-top: -6px;
   }
   .topic-warning {
-    font-size: 10px;
-    color: #b26a00;
+    font-size: 12px;
+    color: var(--ui-warning);
   }
   .topic-agent-status {
-    font-size: 10px;
-    color: #2e7d32;
+    font-size: 12px;
+    color: var(--ui-success);
   }
   .topic-agent-status.unavailable {
-    color: #b26a00;
+    color: var(--ui-warning);
   }
   .topic-agent-status.wide-scope {
-    color: #b26a00;
+    color: var(--ui-warning);
   }
   .topic-select {
     max-width: 150px;
     min-width: 100px;
     font: inherit;
-    font-size: 11px;
+    font-size: 12px;
   }
   .topic-chip {
     max-width: 130px;
@@ -1406,7 +1421,7 @@
     padding: 2px 7px;
     border-radius: 10px;
     background: color-mix(in srgb, var(--accent-color, #0a84ff) 12%, transparent);
-    font-size: 10px;
+    font-size: 12px;
   }
   .proposal-backdrop {
     position: fixed;

@@ -46,9 +46,9 @@
   .field { display: grid; gap: 7px; }
   label { font-size: 12px; font-weight: 600; }
   .choices { display: flex; flex-wrap: wrap; gap: 6px; }
-  .choices button { border: 1px solid var(--line); border-radius: 999px; background: var(--card); color: var(--muted-strong); padding: 6px 9px; font: inherit; font-size: 11.5px; font-weight: 600; cursor: pointer; }
+  .choices button { border: 1px solid var(--line); border-radius: 999px; background: var(--card); color: var(--muted-strong); padding: 6px 9px; font: inherit; font-size: 12px; font-weight: 600; cursor: pointer; }
   .choices button:hover { background: var(--hover); color: var(--fg); }
-  .choices button.selected { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); }
+  .choices button.selected { border-color: var(--accent); background: var(--accent-soft); color: var(--ui-accent-text); }
   textarea, input { width: 100%; box-sizing: border-box; border: 1px solid var(--line-strong); border-radius: 9px; background: var(--input); color: var(--fg); padding: 9px 10px; font: inherit; outline: none; }
   textarea { resize: vertical; min-height: 42px; }
   textarea:focus, input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }

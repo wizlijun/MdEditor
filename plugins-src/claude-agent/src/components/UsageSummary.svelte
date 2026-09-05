@@ -45,10 +45,11 @@
     gap: 5px 10px;
     padding: 7px 12px;
     border-top: 1px solid color-mix(in srgb, currentColor 10%, transparent);
-    font-size: 10px;
+    font-size: 12px;
     line-height: 1.35;
-    opacity: 0.68;
+    color: var(--ui-secondary);
     font-variant-numeric: tabular-nums;
   }
+  .usage span { min-width: 0; overflow-wrap: anywhere; }
   .total { font-weight: 600; }
 </style>

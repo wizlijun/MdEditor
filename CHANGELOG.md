@@ -7,6 +7,10 @@ For the full commit history, see the git log.
 
 ## Unreleased
 
+### Changed
+
+- **Settings and plugin windows share a clearer, keyboard-friendly interface.** Settings keep navigation and actions visible in narrow windows. Plugin windows use readable supporting text, consistent light/dark colors, visible focus and shared popup menus while retaining their individual workflows. Settings and confirmation dialogs preserve in-progress work and explain failed saves; Agent chat retains unsent drafts when reconnecting.
+
 ### Fixed
 
 - **The collaborative Memory document supports whole-document editing.** Cross-block selection, cut/paste, clearing the document, trailing blank paragraphs and hard breaks now persist correctly, and saving no longer interrupts typing or IME input. Formatting, lists, links, images and tables have visible controls; unsaved drafts can be recovered, compared and retried. Block-aware undo checks its target before restoring text, including after an external move. The updated Memory plugin and host Editor Kit must be deployed together.

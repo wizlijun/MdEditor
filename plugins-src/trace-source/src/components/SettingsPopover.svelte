@@ -10,6 +10,7 @@
      directory the setting points at NOW, which is the honest reading of
      "report folder". -->
 <script lang="ts">
+  import { modalFocus } from '../../../../src/lib/ui/modal-focus'
   import { normalizeTraceDir } from '../lib/state-io'
   import { t } from '../lib/strings'
 
@@ -31,17 +32,28 @@
   // at open, and only `oncommit` writes back.
   // svelte-ignore state_referenced_locally
   let value = $state(traceDir)
+  let saving = $state(false)
+  let error = $state('')
   const valid = $derived(normalizeTraceDir(value) !== null)
 
   async function commit(): Promise<void> {
     const normalized = normalizeTraceDir(value)
-    if (normalized === null) return
-    if ((await oncommit(normalized)) !== false) onclose()
+    if (normalized === null || saving) return
+    saving = true
+    error = ''
+    try {
+      if ((await oncommit(normalized)) !== false) onclose()
+    } catch (cause) {
+      error = String(cause)
+    } finally {
+      saving = false
+    }
   }
 
+  function close(): void { if (!saving) onclose() }
+
   function onkeydown(e: KeyboardEvent): void {
-    if (e.key === 'Escape') onclose()
-    else if (e.key === 'Enter') void commit()
+    if (e.key === 'Enter' && !e.isComposing) { e.preventDefault(); void commit() }
   }
 
   // The popover closes because the main window is about to take focus — a
@@ -53,13 +65,14 @@
 </script>
 
 <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
-<div class="backdrop" onclick={onclose}></div>
-<div class="popover" role="dialog" aria-label={t('settings')}>
+<div class="backdrop" onclick={close}></div>
+<div class="popover" role="dialog" aria-modal="true" aria-busy={saving} aria-label={t('settings')} use:modalFocus={{ onClose: close, canClose: () => !saving }}>
   <label for="trace-dir">{t('traceDir')}</label>
   <input
     id="trace-dir"
     type="text"
     bind:value
+    disabled={saving}
     aria-invalid={!valid}
     class:invalid={!valid}
     spellcheck="false"
@@ -71,7 +84,7 @@
     <span class="label" id="prompts-label">{t('prompts')}</span>
     <ul class="prompts" aria-labelledby="prompts-label">
       <li>
-        <button type="button" class="row" onclick={editPrompt}>
+        <button type="button" class="row" disabled={saving} onclick={editPrompt}>
           <span class="name">{t('promptMain')}</span>
           <span class="path" aria-hidden="true">trace-source/CLAUDE.md</span>
         </button>
@@ -81,11 +94,12 @@
   </div>
 
   <div class="actions">
-    <button type="button" class="ghost" onclick={onclose}>{t('close')}</button>
-    <button type="button" class="primary" disabled={!valid} onclick={commit}>
+    <button type="button" class="ghost" disabled={saving} onclick={close}>{t('close')}</button>
+    <button type="button" class="primary" disabled={!valid || saving} onclick={commit}>
       {t('save')}
     </button>
   </div>
+  {#if error}<p class="error" role="alert">{error}</p>{/if}
 </div>
 
 <style>
@@ -101,7 +115,9 @@
     bottom: 2.4rem;
     right: 0.75rem;
     z-index: 11;
-    width: 300px;
+    width: min(360px, calc(100vw - 24px));
+    max-height: calc(100vh - 64px);
+    overflow-y: auto;
     box-sizing: border-box;
     padding: 0.75rem;
     border: 1px solid var(--line, #e5e7eb);
@@ -151,17 +167,16 @@
   /* The file behind the row — the point of "the prompt is a file you own". */
   .path {
     margin-left: auto;
-    font-size: 0.7rem;
-    opacity: 0.55;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
+    font-size: 12px;
+    color: var(--ui-secondary);
+    overflow-wrap: anywhere;
+    min-width: 0;
   }
   .hint {
     margin: 0.45rem 0 0;
-    font-size: 0.7rem;
+    font-size: 12px;
     line-height: 1.4;
-    opacity: 0.6;
+    color: var(--ui-secondary);
   }
   input {
     width: 100%;
@@ -176,6 +191,7 @@
     font-size: 0.85rem;
   }
   input.invalid { border-color: #dc2626; }
+  .error { color: var(--ui-danger); font-size: 12px; overflow-wrap: anywhere; }
   .actions {
     display: flex;
     justify-content: flex-end;

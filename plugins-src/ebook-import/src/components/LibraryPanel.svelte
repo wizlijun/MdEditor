@@ -164,7 +164,7 @@
     margin: 0;
   }
   .count {
-    font-size: 10px;
+    font-size: 12px;
     padding: 1px 7px;
     border-radius: 9px;
     background: color-mix(in srgb, currentColor 10%, transparent);
@@ -189,10 +189,10 @@
     min-width: 0;
     max-width: 145px;
     font: inherit;
-    font-size: 10px;
+    font-size: 12px;
   }
   .row-main select.unclassified {
-    color: #b26a00;
+    color: var(--ui-warning);
   }
   button {
     font: inherit;
@@ -237,7 +237,7 @@
   }
   .month,
   .stage {
-    font-size: 10px;
+    font-size: 12px;
     opacity: 0.55;
     flex: none;
   }
@@ -252,13 +252,13 @@
   }
   p.error {
     margin: 2px 0 0;
-    font-size: 11px;
-    color: #c62828;
+    font-size: 12px;
+    color: var(--ui-danger);
   }
   .detail {
     display: block;
     margin-top: 2px;
-    font-size: 10px;
+    font-size: 12px;
     opacity: 0.65;
   }
 </style>

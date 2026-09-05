@@ -198,22 +198,22 @@
   .title-button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   .title-button:disabled { cursor: default; }
   p { margin: 8px 0 0; color: var(--muted); font-size: 12.5px; line-height: 1.45; overflow: hidden; display: -webkit-box; line-clamp: 2; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
-  .state, .badge { flex: none; border-radius: 999px; padding: 2px 7px; font-size: 10.5px; font-weight: 600; }
+  .state, .badge { flex: none; border-radius: 999px; padding: 2px 7px; font-size: 12px; font-weight: 600; }
   .state { background: var(--chip); color: var(--muted-strong); }
   .badge.proof { background: var(--proof-bg); color: var(--proof-fg); }
-  .badge.task { background: var(--accent-soft); color: var(--accent); }
+  .badge.task { background: var(--accent-soft); color: var(--ui-accent-text); }
   .badge.agent { border: 1px solid var(--line); background: transparent; color: var(--muted-strong); }
-  .badge.project { background: var(--accent-soft); color: var(--accent); }
+  .badge.project { background: var(--accent-soft); color: var(--ui-accent-text); }
   .badge.priority { border: 1px solid var(--line-strong); background: var(--chip); color: var(--fg); }
   .badge.priority-p0 { border-color: color-mix(in srgb, var(--danger) 55%, var(--line)); background: color-mix(in srgb, var(--danger) 13%, var(--card)); color: var(--danger); }
   .badge.priority-p1 { border-color: color-mix(in srgb, var(--warn-fg) 42%, var(--line)); background: var(--warn-bg); color: var(--warn-fg); }
-  .badge.priority-p2 { border-color: color-mix(in srgb, var(--accent) 38%, var(--line)); background: var(--accent-soft); color: var(--accent); }
-  .badge.due { background: var(--accent-soft); color: var(--accent); }
+  .badge.priority-p2 { border-color: color-mix(in srgb, var(--accent) 38%, var(--line)); background: var(--accent-soft); color: var(--ui-accent-text); }
+  .badge.due { background: var(--accent-soft); color: var(--ui-accent-text); }
   .badge.due.muted { background: var(--chip); color: var(--muted-strong); }
   .badge.due.overdue { background: color-mix(in srgb, var(--danger) 13%, var(--card)); color: var(--danger); }
   .badge.context { background: var(--proof-bg); color: var(--proof-fg); }
   .badge.context.missing { background: var(--warn-bg); color: var(--warn-fg); }
-  .project-suggestion { border: 1px dashed var(--accent); background: transparent; color: var(--accent); cursor: pointer; }
+  .project-suggestion { border: 1px dashed var(--accent); background: transparent; color: var(--ui-accent-text); cursor: pointer; }
   .project-suggestion:hover:not(:disabled) { background: var(--accent-soft); }
   .badge.warning { background: var(--warn-bg); color: var(--warn-fg); }
   .actions { display: flex; flex-wrap: wrap; gap: 6px; }

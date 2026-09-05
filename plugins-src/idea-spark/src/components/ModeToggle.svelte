@@ -18,11 +18,10 @@
   let { mode, onchange }: { mode: 'rich' | 'source'; onchange: (m: 'rich' | 'source') => void } = $props()
 </script>
 
-<div class="seg" role="tablist" aria-label={t('editorMode')}>
+<div class="seg" role="group" aria-label={t('editorMode')}>
   <button
     type="button"
-    role="tab"
-    aria-selected={mode === 'rich'}
+    aria-pressed={mode === 'rich'}
     aria-label={t('modeRich')}
     class:active={mode === 'rich'}
     onclick={() => onchange('rich')}
@@ -35,8 +34,7 @@
   </button>
   <button
     type="button"
-    role="tab"
-    aria-selected={mode === 'source'}
+    aria-pressed={mode === 'source'}
     aria-label={t('modeSource')}
     class:active={mode === 'source'}
     onclick={() => onchange('source')}

@@ -4,6 +4,9 @@
   import { ask } from '@tauri-apps/plugin-dialog'
   import { openUrl } from '@tauri-apps/plugin-opener'
   import { t } from '../lib/i18n/store.svelte'
+  import { onDestroy } from 'svelte'
+
+  let { onBusyChange }: { onBusyChange?: (busy: boolean) => void } = $props()
 
   let remoteUrl = $state('')
   let branch = $state('main')
@@ -13,6 +16,9 @@
   let busy = $state(false)
   let saveError = $state<string | null>(null)
   let showPatInput = $state(false)
+  const canSave = $derived(!busy && !!remoteUrl && (vaultStore.configured || !!pat))
+  $effect(() => { onBusyChange?.(busy) })
+  onDestroy(() => onBusyChange?.(false))
 
   $effect(() => { refreshStatus() })
 
@@ -30,9 +36,11 @@
         authorEmail = `${login}@users.noreply.github.com`
       }
     }, 800)
+    return () => { if (emailFetchTimer) clearTimeout(emailFetchTimer) }
   })
 
   async function onSave() {
+    if (!canSave) return
     saveError = null
     busy = true
     try {
@@ -93,15 +101,15 @@
   }
 </script>
 
-<section class="vault-settings">
+<section class="vault-settings ui-surface" aria-label={t('settings.tab.vault')}>
   <div class="status-block">
     <div class="status-row">
       <span class="label">{t('vault.statusLabel')}</span>
-      <span class="state state-{vaultStore.state}">
+      <span class="state state-{vaultStore.state}" role="status" aria-live="polite">
         {#if vaultStore.state === 'syncing'}{t('vault.syncing')}
         {:else if vaultStore.state === 'cloning'}{t('vault.cloning')}
         {:else if vaultStore.state === 'idle'}{t('vault.lastSync', { time: formatLastSync(vaultStore.lastSync) })}
-        {:else if vaultStore.state === 'error'}❌ {vaultStore.errorMsg ?? t('vault.unknownError')}
+        {:else if vaultStore.state === 'error'}{vaultStore.errorMsg ?? t('vault.unknownError')}
         {:else if vaultStore.state === 'conflict'}{t('vault.hasConflicts')}
         {:else}{t('vault.notConfigured')}
         {/if}
@@ -119,42 +127,44 @@
 
   <hr />
 
-  <div class="form">
+  <form class="form" aria-busy={busy} onsubmit={(event) => { event.preventDefault(); void onSave() }}>
+    <fieldset disabled={busy}>
     <label>
       <span>{t('vault.remoteUrl')}</span>
-      <input type="text" bind:value={remoteUrl} placeholder="https://github.com/user/repo.git" />
+      <input type="text" bind:value={remoteUrl} placeholder="https://github.com/user/repo.git" spellcheck="false" autocapitalize="off" />
     </label>
     <label>
       <span>{t('vault.branch')}</span>
-      <input type="text" bind:value={branch} placeholder="main" />
+      <input type="text" bind:value={branch} placeholder="main" spellcheck="false" autocapitalize="off" />
     </label>
-    <label class="pat-row">
-      <span>{t('vault.pat')}</span>
+    <div class="pat-row field">
+      <span id="vault-pat-label">{t('vault.pat')}</span>
       {#if !showPatInput && vaultStore.configured}
         <div>
           <span class="badge ok">{t('vault.patConfigured')}</span>
           <button type="button" class="link" onclick={() => (showPatInput = true)}>{t('vault.patUpdate')}</button>
         </div>
       {:else}
-        <input type="password" bind:value={pat} placeholder="github_pat_..." />
+        <input type="password" aria-labelledby="vault-pat-label" bind:value={pat} placeholder="github_pat_..." autocomplete="new-password" spellcheck="false" />
       {/if}
       <button type="button" class="link" onclick={openTokenPage}>{t('vault.howToToken')}</button>
-    </label>
+    </div>
     <label>
       <span>{t('vault.authorName')}</span>
       <input type="text" bind:value={authorName} />
     </label>
     <label>
       <span>{t('vault.authorEmail')}</span>
-      <input type="text" bind:value={authorEmail} placeholder="user@users.noreply.github.com" />
+      <input type="text" inputmode="email" bind:value={authorEmail} placeholder="user@users.noreply.github.com" autocapitalize="off" />
     </label>
-    <button class="primary" onclick={onSave} disabled={busy || !remoteUrl || (!vaultStore.configured && !pat)}>
+    <button type="submit" class="primary" disabled={!canSave}>
       {busy ? t('vault.saving') : t('vault.saveConfig')}
     </button>
+    </fieldset>
     {#if saveError}
-      <p class="error">❌ {saveError}</p>
+      <p class="error" role="alert">{saveError}</p>
     {/if}
-  </div>
+  </form>
 
   <hr />
 
@@ -162,24 +172,29 @@
 </section>
 
 <style>
-  .vault-settings { padding: 8px 0; }
-  .status-block { padding: 12px; background: var(--bg-sub, rgba(0,0,0,0.03)); border-radius: 8px; }
-  .status-row { display: flex; gap: 8px; margin-bottom: 8px; }
-  .label { font-weight: 500; opacity: 0.7; }
-  .state-error { color: var(--danger, #e01b24); }
-  .state-conflict { color: var(--warn, #f5c211); }
-  .actions { display: flex; gap: 8px; margin-top: 8px; }
-  .actions button { padding: 6px 14px; }
-  .danger { color: var(--danger, #e01b24); }
-  hr { border: 0; border-top: 1px solid rgba(0,0,0,0.08); margin: 16px 0; }
-  .form label { display: flex; flex-direction: column; gap: 4px; margin-bottom: 12px; }
-  .form label > span { font-size: 13px; opacity: 0.8; }
-  .form input { padding: 6px 10px; border: 1px solid rgba(0,0,0,0.1); border-radius: 6px; font: inherit; }
-  .badge.ok { color: var(--accent, #2ec27e); }
-  .link { background: transparent; border: 0; padding: 0; color: var(--accent, #3584e4); text-decoration: underline; cursor: pointer; font-size: 12px; }
-  .primary { padding: 8px 20px; background: var(--accent, #3584e4); color: white; border: 0; border-radius: 6px; font: inherit; cursor: pointer; }
+  .vault-settings { padding: 0; min-width: 0; }
+  .status-block { padding: 14px; background: var(--ui-bg); border: 1px solid var(--ui-separator); border-radius: 8px; }
+  .status-row { display: flex; flex-wrap: wrap; gap: 8px; }
+  .label { font-weight: 500; color: var(--ui-secondary); }
+  .state { min-width: 0; overflow-wrap: anywhere; }
+  .state-error { color: var(--ui-danger); }
+  .state-conflict { color: var(--ui-warning); }
+  .actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+  button { padding: 7px 12px; min-height: 32px; font: inherit; border: 1px solid var(--ui-control-border); border-radius: 6px; color: CanvasText; background: var(--ui-surface, Canvas); cursor: pointer; }
+  button:not(:disabled):hover { background: var(--ui-hover); }
+  button:disabled { opacity: 0.5; cursor: default; }
+  .danger { color: var(--ui-danger); }
+  hr { border: 0; border-top: 1px solid var(--ui-separator); margin: 20px 0; }
+  fieldset { border: 0; margin: 0; padding: 0; min-width: 0; }
+  .form label, .field { display: flex; flex-direction: column; align-items: stretch; gap: 6px; margin-bottom: 16px; }
+  .form label > span, .field > span { font-size: 13px; font-weight: 500; }
+  .form input { width: 100%; min-width: 0; min-height: 34px; padding: 7px 10px; border: 1px solid var(--ui-control-border); border-radius: 6px; font: inherit; background: var(--ui-surface, Canvas); color: CanvasText; }
+  .badge.ok { color: var(--ui-success); }
+  .link { align-self: flex-start; background: transparent; border: 0; padding: 4px 0; color: var(--ui-accent-text); text-decoration: underline; text-underline-offset: 3px; cursor: pointer; font-size: 12px; }
+  .primary { padding: 8px 16px; background: var(--ui-accent); color: var(--ui-accent-foreground, white); border-color: var(--ui-accent); }
+  button.primary:not(:disabled):hover { background: color-mix(in srgb, var(--ui-accent) 88%, black); }
   .primary:disabled { opacity: 0.5; cursor: not-allowed; }
-  .pat-row > div { display: flex; gap: 8px; align-items: center; }
-  .error { color: var(--danger, #e01b24); margin-top: 8px; }
-  .note { font-size: 12px; opacity: 0.6; }
+  .pat-row > div { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  .error { color: var(--ui-danger); margin-top: 12px; font-size: 13px; overflow-wrap: anywhere; }
+  .note { font-size: 12px; line-height: 1.5; color: var(--ui-secondary); overflow-wrap: anywhere; }
 </style>

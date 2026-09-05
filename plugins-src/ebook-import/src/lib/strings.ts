@@ -25,6 +25,7 @@ export type MessageKey =
   | 'settings.calibre.pick'
   | 'settings.calibre.install'
   | 'settings.save'
+  | 'settings.saved'
   | 'queue.empty'
   | 'status.pending'
   | 'status.running'
@@ -186,6 +187,7 @@ const en: Catalog = {
   'settings.calibre.pick': 'Choose…',
   'settings.calibre.install': 'Install Calibre',
   'settings.save': 'Save',
+  'settings.saved': 'Saved',
   'queue.empty': 'Nothing queued yet — add files, choose whether to OCR, then press Start.',
   'status.pending': 'Pending',
   'status.running': 'Running',
@@ -345,6 +347,7 @@ const zh: Catalog = {
   'settings.calibre.pick': '选择…',
   'settings.calibre.install': '安装 Calibre',
   'settings.save': '保存',
+  'settings.saved': '已保存',
   'queue.empty': '任务列表为空——先添加文件、选好是否 OCR,再点「开始导入」。',
   'status.pending': '等待中',
   'status.running': '进行中',
@@ -502,6 +505,7 @@ const ja: Catalog = {
   'settings.calibre.pick': '選択…',
   'settings.calibre.install': 'Calibre をインストール',
   'settings.save': '保存',
+  'settings.saved': '保存しました',
   'queue.empty': 'まだ何もありません。ファイルを追加し、OCR の有無を選んでから「開始」を押してください。',
   'status.pending': '待機中',
   'status.running': '実行中',
@@ -661,6 +665,7 @@ const de: Catalog = {
   'settings.calibre.pick': 'Auswählen…',
   'settings.calibre.install': 'Calibre installieren',
   'settings.save': 'Speichern',
+  'settings.saved': 'Gespeichert',
   'queue.empty': 'Noch nichts in der Liste — Dateien hinzufügen, OCR wählen, dann auf Start drücken.',
   'status.pending': 'Ausstehend',
   'status.running': 'Läuft',

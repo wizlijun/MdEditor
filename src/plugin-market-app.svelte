@@ -23,6 +23,7 @@
      5. Toggle enabled on an installed plugin → plugin_market_set_enabled;
         Uninstall → confirm → plugin_market_uninstall; both re-fetch. -->
 <script lang="ts">
+  import './styles/ui-foundation.css'
   import { onMount } from 'svelte'
   import { invoke } from '@tauri-apps/api/core'
   import { listen } from '@tauri-apps/api/event'
@@ -429,7 +430,7 @@
 
 </script>
 
-<main aria-busy={loading}>
+<main class="ui-surface" aria-busy={loading}>
   {#if !ready}
     <div class="boot"><span class="spinner"></span></div>
   {:else}
@@ -556,7 +557,7 @@
 
                       <footer class="card-footer">
                         <label class="switch-control">
-                          <input type="checkbox" checked={item.row.enabled} disabled={batchUpdating || busy[item.row.id]}
+                          <input type="checkbox" checked={item.row.enabled} aria-label={displayName} disabled={batchUpdating || busy[item.row.id]}
                             onchange={(e) => toggleEnabled(item.row, (e.currentTarget as HTMLInputElement).checked)} />
                           <span class="switch" aria-hidden="true"><span></span></span>
                           <span class="switch-label">{item.row.enabled ? t('pluginMarket.enabled') : t('pluginMarket.disabled')}</span>
@@ -577,7 +578,7 @@
                       <div class="card-heading">
                         <span class="plugin-mark" aria-hidden="true">{monogram(displayName)}</span>
                         <div class="plugin-title">
-                          <h3>{displayName}</h3>
+                          <h3 title={displayName}>{displayName}</h3>
                           <div class="plugin-meta">
                             <span class="version">v{item.entry.version}</span>
                             {#if aiRole}<span class="ai-badge">✦ {t(pluginAiRoleLabelKey(aiRole))}</span>{/if}
@@ -625,13 +626,12 @@
     --hover-surface: color-mix(in srgb, CanvasText 5%, Canvas);
     --window-border: color-mix(in srgb, CanvasText 11%, transparent);
     --strong-border: color-mix(in srgb, CanvasText 18%, transparent);
-    --standard-accent: #3479db;
+    --standard-accent: var(--ui-accent);
     height: 100vh;
     overflow: auto;
     box-sizing: border-box;
     background: var(--window-background);
   }
-  @supports (color: AccentColor) { main { --standard-accent: AccentColor; } }
   .page-shell { width: min(1180px, calc(100% - 40px)); margin: 0 auto; padding: 24px 0 40px; }
   .boot { min-height: 100%; display: grid; place-items: center; }
   .hero {
@@ -644,15 +644,15 @@
   }
   .hero-copy h1 {
     margin: 0;
-    font-size: clamp(28px, 4vw, 36px);
-    line-height: 1.02;
-    letter-spacing: -0.045em;
-    font-weight: 760;
+    font-size: 24px;
+    line-height: 1.2;
+    letter-spacing: -0.025em;
+    font-weight: 650;
   }
   .hero-subtitle {
     max-width: 650px;
     margin: 7px 0 0;
-    color: color-mix(in srgb, CanvasText 62%, transparent);
+    color: var(--ui-secondary);
     font-size: 13px;
     line-height: 1.4;
   }
@@ -662,20 +662,20 @@
     flex-wrap: wrap;
     gap: 5px 8px;
     margin-top: 5px;
-    color: color-mix(in srgb, CanvasText 48%, transparent);
-    font-size: 10.5px;
+    color: var(--ui-secondary);
+    font-size: 12px;
     line-height: 1.35;
   }
   .host-version {
     padding: 2px 6px;
     border-radius: 6px;
     background: color-mix(in srgb, CanvasText 6%, transparent);
-    color: color-mix(in srgb, CanvasText 66%, transparent);
+    color: var(--ui-secondary);
     font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
     white-space: nowrap;
   }
   .restart-hint { font-weight: 520; }
-  .hero-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; }
+  .hero-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 8px; }
   .summary {
     grid-column: 1 / -1;
     display: inline-flex;
@@ -694,8 +694,8 @@
     display: inline-flex;
     align-items: center;
     gap: 6px;
-    color: color-mix(in srgb, CanvasText 58%, transparent);
-    font-size: 11px;
+    color: var(--ui-secondary);
+    font-size: 12px;
     white-space: nowrap;
   }
   .summary-item strong { color: CanvasText; font-size: 12px; }
@@ -763,19 +763,19 @@
     letter-spacing: -0.06em;
   }
   .category-header h2 { margin: 0; font-size: 16px; letter-spacing: -0.02em; }
-  .category-title-row { display: flex; align-items: center; gap: 7px; }
+  .category-title-row { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; }
   .system-badge {
     padding: 2px 6px;
     border: 1px solid var(--window-border);
     border-radius: 999px;
     background: var(--card-surface);
-    color: color-mix(in srgb, CanvasText 58%, transparent);
-    font-size: 8px;
+    color: var(--ui-secondary);
+    font-size: 12px;
     font-weight: 700;
     letter-spacing: 0.02em;
     white-space: nowrap;
   }
-  .category-header p { margin: 2px 0 0; color: color-mix(in srgb, CanvasText 48%, transparent); font-size: 10px; }
+  .category-header p { margin: 2px 0 0; color: var(--ui-secondary); font-size: 12px; }
   .plugin-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px; }
   .plugin-card {
     min-width: 0;
@@ -808,7 +808,7 @@
     border-color: var(--strong-border);
     box-shadow: 0 4px 12px color-mix(in srgb, CanvasText 7%, transparent);
   }
-  .card-heading { display: flex; align-items: center; gap: 9px; min-width: 0; }
+  .card-heading { display: grid; grid-template-columns: 32px minmax(0, 1fr); align-items: start; gap: 6px 9px; min-width: 0; }
   .plugin-mark {
     display: grid;
     place-items: center;
@@ -822,36 +822,38 @@
     font-weight: 750;
   }
   .plugin-title { min-width: 0; flex: 1; }
-  .plugin-title h3 { margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; letter-spacing: -0.01em; }
+  .plugin-title h3 { margin: 0; overflow-wrap: anywhere; font-size: 14px; line-height: 1.4; letter-spacing: -0.01em; }
   .plugin-meta { display: flex; align-items: center; flex-wrap: wrap; gap: 4px; margin-top: 2px; }
   .version {
-    color: color-mix(in srgb, CanvasText 43%, transparent);
+    color: var(--ui-secondary);
     font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-    font-size: 9.5px;
+    font-size: 12px;
   }
   .ai-badge {
     padding: 1px 5px;
     border-radius: 999px;
     background: color-mix(in srgb, CanvasText 7%, transparent);
-    color: color-mix(in srgb, CanvasText 60%, transparent);
-    font-size: 8px;
+    color: var(--ui-secondary);
+    font-size: 12px;
     font-weight: 700;
     white-space: nowrap;
   }
   .status {
+    grid-column: 2;
+    justify-self: start;
     flex: 0 0 auto;
     padding: 3px 7px;
     border-radius: 999px;
     background: color-mix(in srgb, CanvasText 7%, transparent);
-    color: color-mix(in srgb, CanvasText 54%, transparent);
-    font-size: 9px;
+    color: var(--ui-secondary);
+    font-size: 12px;
     font-weight: 650;
   }
   .status.enabled,
-  .available-status { background: color-mix(in srgb, CanvasText 7%, transparent); color: color-mix(in srgb, CanvasText 62%, transparent); }
+  .available-status { background: color-mix(in srgb, CanvasText 7%, transparent); color: var(--ui-secondary); }
   .update-status {
     background: color-mix(in srgb, var(--standard-accent) 12%, transparent);
-    color: var(--standard-accent);
+    color: var(--ui-accent-text);
     box-shadow: none;
   }
   .desc {
@@ -862,8 +864,8 @@
     -webkit-box-orient: vertical;
     -webkit-line-clamp: 2;
     line-clamp: 2;
-    color: color-mix(in srgb, CanvasText 61%, transparent);
-    font-size: 11.5px;
+    color: var(--ui-secondary);
+    font-size: 12px;
     line-height: 1.45;
   }
   .caps { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 7px; }
@@ -873,12 +875,12 @@
     overflow: hidden;
     border-radius: 999px;
     background: color-mix(in srgb, CanvasText 6%, transparent);
-    color: color-mix(in srgb, CanvasText 52%, transparent);
-    font-size: 8.5px;
+    color: var(--ui-secondary);
+    font-size: 12px;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
-  .cap.sensitive { background: color-mix(in srgb, #e0a800 15%, transparent); color: color-mix(in srgb, #b06b00 88%, CanvasText); font-weight: 600; }
+  .cap.sensitive { background: color-mix(in srgb, #e0a800 15%, transparent); color: var(--ui-warning); font-weight: 600; }
   .card-footer {
     display: flex;
     align-items: center;
@@ -893,13 +895,13 @@
     min-width: 0;
     flex: 1;
     overflow: hidden;
-    color: color-mix(in srgb, CanvasText 38%, transparent);
+    color: var(--ui-secondary);
     font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-    font-size: 9.5px;
+    font-size: 12px;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
-  .actions { display: flex; align-items: center; justify-content: flex-end; gap: 6px; }
+  .actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 6px; }
   .switch-control { position: relative; display: inline-flex; align-items: center; gap: 7px; cursor: pointer; }
   .switch-control input { position: absolute; width: 1px; height: 1px; opacity: 0; }
   .switch { position: relative; width: 30px; height: 18px; border-radius: 999px; background: color-mix(in srgb, CanvasText 18%, transparent); transition: background 140ms ease; }
@@ -918,7 +920,7 @@
   .switch-control input:checked + .switch > span { transform: translateX(12px); }
   .switch-control input:focus-visible + .switch { outline: 2px solid var(--standard-accent); outline-offset: 2px; }
   .switch-control input:disabled + .switch { opacity: 0.45; }
-  .switch-label { color: color-mix(in srgb, CanvasText 58%, transparent); font-size: 10.5px; }
+  .switch-label { color: var(--ui-secondary); font-size: 12px; }
   button {
     display: inline-flex;
     align-items: center;
@@ -949,13 +951,13 @@
   }
   .update-all:hover:not(:disabled) { background: color-mix(in srgb, var(--standard-accent) 86%, black); }
   .update-all > span { font-size: 15px; font-weight: 760; }
-  .mini { min-height: 27px; padding: 0 9px; font-size: 10px; }
+  .mini { min-height: 30px; padding: 0 10px; font-size: 13px; }
   .primary { border-color: transparent; background: var(--standard-accent); color: white; }
   .primary:hover:not(:disabled) { background: color-mix(in srgb, var(--standard-accent) 86%, black); }
   .update-action { background: var(--standard-accent); box-shadow: none; }
   .update-action:hover:not(:disabled) { background: color-mix(in srgb, var(--standard-accent) 86%, black); }
   .quiet { border-color: transparent; background: transparent; }
-  .danger { color: #d43b54; }
+  .danger { color: var(--ui-danger); }
   .danger:hover:not(:disabled) { background: color-mix(in srgb, #d43b54 9%, transparent); }
   .empty-state {
     display: flex;
@@ -966,7 +968,7 @@
     min-height: 260px;
     border: 1px dashed color-mix(in srgb, CanvasText 14%, transparent);
     border-radius: 26px;
-    color: color-mix(in srgb, CanvasText 45%, transparent);
+    color: var(--ui-secondary);
   }
   .empty-state span { font-size: 30px; }
   .empty-state h2 { margin: 0; font-size: 13px; font-weight: 500; }
@@ -985,7 +987,7 @@
   .skeleton-title { width: 55%; height: 14px; margin: 8px 0 28px; }
   .skeleton-line { width: 100%; height: 9px; margin-bottom: 10px; }
   .skeleton-line.short { width: 72%; }
-  .spinner { width: 18px; height: 18px; border: 2px solid color-mix(in srgb, CanvasText 14%, transparent); border-top-color: color-mix(in srgb, CanvasText 65%, transparent); border-radius: 50%; animation: spin 800ms linear infinite; }
+  .spinner { width: 18px; height: 18px; border: 2px solid color-mix(in srgb, CanvasText 14%, transparent); border-top-color: var(--ui-secondary); border-radius: 50%; animation: spin 800ms linear infinite; }
   .spinner.small { width: 11px; height: 11px; border-width: 1.5px; }
   .spinning { display: inline-block; animation: spin 850ms linear infinite; }
   @keyframes spin { to { transform: rotate(360deg); } }
@@ -996,7 +998,7 @@
   @media (max-width: 680px) {
     .page-shell { width: min(100% - 28px, 1180px); padding: 20px 0 32px; }
     .hero { gap: 12px; padding-bottom: 18px; }
-    .hero-copy h1 { font-size: 28px; }
+    .hero-copy h1 { font-size: 24px; }
     .refresh { padding: 0 11px; }
     .category-block { padding: 14px; border-radius: 16px; }
     .plugin-grid { grid-template-columns: minmax(0, 1fr); }

@@ -3,6 +3,7 @@
      Tauri IPC: all host effects go through the window.notemd fetch-RPC bridge
      (see src/lib/bridge.ts). The parse/plan/convert core is unchanged. -->
 <script lang="ts">
+  import '../../../src/styles/ui-foundation.css'
   import { onMount } from 'svelte'
   import { setLocale, t } from './lib/strings'
   import {
@@ -310,7 +311,7 @@
   }
 </script>
 
-<main>
+<main class="ui-surface">
   {#if !ready}
     <p class="msg">…</p>
   {:else}
@@ -542,22 +543,22 @@
     border: 1px solid color-mix(in srgb, CanvasText 15%, transparent);
     font-size: 13px;
   }
-  .cli-head { display: flex; align-items: center; gap: 10px; }
+  .cli-head { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; }
   .cli-toggle { display: flex; align-items: center; gap: 6px; }
   .link { color: color-mix(in srgb, CanvasText 60%, transparent); text-decoration: underline; font-size: 12px; }
   .cli-body { margin-top: 10px; display: flex; flex-direction: column; gap: 8px; }
   .status { margin: 0; }
-  .status.ok { color: #34c759; }
-  .status.warn { color: #ff9500; }
-  .status.err { color: #ff3b30; }
+  .status.ok { color: var(--ui-success); }
+  .status.warn { color: var(--ui-warning); }
+  .status.err { color: var(--ui-danger); }
   .hint-line { margin: 0; font-size: 12px; opacity: 0.75; }
-  .cli-row { display: flex; align-items: center; gap: 10px; }
+  .cli-row { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; }
   .date-label { display: flex; align-items: center; gap: 6px; font-size: 12px; }
   button.sync { font-size: 13px; padding: 5px 12px; }
   .pick { font-size: 14px; padding: 6px 14px; }
   .progress { margin-top: 14px; font-size: 13px; }
   progress { width: 100%; }
-  .counter { font-size: 12px; opacity: 0.75; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .counter { font-size: 12px; color: var(--ui-secondary); overflow-wrap: anywhere; }
   .banner { padding: 10px 12px; border-radius: 6px; font-weight: 600; font-size: 13px; }
   .ok-banner { background: color-mix(in srgb, #34c759 18%, transparent); }
   .error-banner { background: color-mix(in srgb, #ff3b30 22%, transparent); }
@@ -573,6 +574,8 @@
   .error-log h2 { font-size: 13px; margin: 0; }
   .error-log ul { list-style: none; margin: 0; padding: 6px 10px; max-height: 220px; overflow: auto;
     font-size: 12px; font-family: ui-monospace, monospace; }
-  .error-log li.error { color: #ff3b30; }
-  .error-log li.warn { color: #ff9500; }
+  .error-log li.error { color: var(--ui-danger); }
+  .error-log li.warn { color: var(--ui-warning); }
+  .status, .banner, .renamed-list, .conflicts, .error-log { overflow-wrap: anywhere; }
+  .pick { background: var(--ui-accent); color: white; border: 1px solid transparent; border-radius: 6px; }
 </style>

@@ -1,0 +1,42 @@
+/* Single popup chrome source, imported by app.css and plugin UI foundation. */
+.menu-panel {
+  background: color-mix(in srgb, Canvas 78%, transparent);
+  -webkit-backdrop-filter: blur(28px) saturate(1.6);
+  backdrop-filter: blur(28px) saturate(1.6);
+  color: CanvasText;
+  border: 0.5px solid color-mix(in srgb, CanvasText 22%, transparent);
+  border-radius: 10px;
+  box-shadow: 0 10px 34px rgba(0, 0, 0, 0.22), 0 1px 3px rgba(0, 0, 0, 0.1);
+  padding: 5px;
+  font-family: -apple-system, BlinkMacSystemFont, 'Helvetica Neue', sans-serif;
+  font-size: 13px;
+  font-weight: 400;
+}
+.menu-row {
+  display: flex;
+  align-items: center;
+  padding: 3px 9px;
+  border-radius: 5px;
+  user-select: none;
+  white-space: nowrap;
+  cursor: default;
+}
+/* Specificity (0,3,0) beats Svelte-scoped button background resets. */
+.menu-panel .menu-row.active,
+.menu-panel .menu-row:hover {
+  background: #0a63ff;
+  color: #fff;
+}
+@supports (background: AccentColor) {
+  .menu-panel .menu-row.active,
+  .menu-panel .menu-row:hover { background: AccentColor; color: #fff; }
+}
+.menu-row.disabled { opacity: 0.35; pointer-events: none; }
+.menu-sep { height: 1px; margin: 5px 9px; background: color-mix(in srgb, CanvasText 12%, transparent); }
+@media (prefers-reduced-transparency: reduce) {
+  .menu-panel { background: Canvas; backdrop-filter: none; -webkit-backdrop-filter: none; }
+}
+@media (forced-colors: active) {
+  .menu-panel { border-color: CanvasText; background: Canvas; }
+  .menu-panel .menu-row.active, .menu-panel .menu-row:hover { background: Highlight; color: HighlightText; }
+}

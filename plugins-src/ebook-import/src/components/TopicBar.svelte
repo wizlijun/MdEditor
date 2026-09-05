@@ -79,7 +79,7 @@
   }
   header p {
     margin-top: 2px;
-    font-size: 10px;
+    font-size: 12px;
     opacity: 0.58;
   }
   button {
@@ -97,7 +97,7 @@
     border: 1px solid color-mix(in srgb, currentColor 20%, transparent);
     border-radius: 6px;
     background: color-mix(in srgb, currentColor 5%, transparent);
-    font-size: 11px;
+    font-size: 12px;
   }
   .cards {
     display: grid;
@@ -141,11 +141,11 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    font-size: 10px;
+    font-size: 12px;
     opacity: 0.62;
   }
   .count {
-    font-size: 10px;
+    font-size: 12px;
     opacity: 0.55;
   }
   .empty {
@@ -154,7 +154,7 @@
     border: 1px dashed color-mix(in srgb, currentColor 28%, transparent);
     border-radius: 7px;
     background: transparent;
-    font-size: 11px;
+    font-size: 12px;
     text-align: center;
   }
 </style>

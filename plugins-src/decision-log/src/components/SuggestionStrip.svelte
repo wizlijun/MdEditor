@@ -189,7 +189,7 @@
     padding: 0.2rem 0.3rem; border: 0; background: transparent; color: inherit;
     font: inherit; font-size: 0.76rem; opacity: 0.55; cursor: pointer;
   }
-  .reject:hover { opacity: 1; color: #dc2626; }
+  .reject:hover { opacity: 1; color: var(--ui-danger); }
   .reject:disabled { opacity: 0.3; cursor: not-allowed; }
   .x {
     padding: 0 0.35rem; border: 0; background: transparent; color: inherit;
@@ -199,7 +199,7 @@
   .x:disabled { opacity: 0.3; cursor: not-allowed; }
   .detail { margin-top: 0.4rem; padding-top: 0.4rem; border-top: 1px solid color-mix(in srgb, currentColor 12%, transparent); }
   .summary { margin: 0 0 0.35rem; line-height: 1.4; }
-  .ev-lbl { display: block; font-size: 0.72rem; opacity: 0.6; margin-bottom: 0.2rem; }
+  .ev-lbl { display: block; font-size: 12px; opacity: 0.6; margin-bottom: 0.2rem; }
   .detail ul { margin: 0; padding-left: 1rem; }
   .detail li { margin: 0.1rem 0; line-height: 1.35; }
 </style>

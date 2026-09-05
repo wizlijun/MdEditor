@@ -5,6 +5,7 @@
      the system appearance (project convention — otherwise Canvas system colors
      get pinned to light; see MEMORY reference_webview_color_scheme). -->
 <script lang="ts">
+  import '../../../src/styles/ui-foundation.css'
   import { onMount } from 'svelte'
   import { state as store, refresh } from './lib/store.svelte'
   import Board from './components/Board.svelte'
@@ -24,7 +25,7 @@
   })
 </script>
 
-<main class="app">
+<main class="app ui-surface">
   <header class="topbar">
     <h1>{t('panel.title')}</h1>
     <p class="value-line">{t('value.line')}</p>
@@ -51,6 +52,8 @@
     color: CanvasText;
   }
   .app {
+    --line: var(--ui-separator);
+    --accent: var(--ui-accent);
     display: flex;
     flex-direction: column;
     height: 100vh;
@@ -67,8 +70,8 @@
   .topbar h1 { margin: 0; font-size: 1.05rem; flex: 0 0 auto; }
   /* R1: one-line value proposition — always visible, quiet styling. */
   .value-line {
-    margin: 0; font-size: 0.82rem; opacity: 0.6; line-height: 1.4;
-    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0;
+    margin: 0; font-size: 13px; color: var(--ui-secondary); line-height: 1.4;
+    overflow-wrap: anywhere; min-width: 0;
   }
   .content {
     flex: 1;
@@ -81,5 +84,9 @@
     align-items: center;
     justify-content: center;
     opacity: 0.6;
+  }
+  @media (max-width: 660px) {
+    .app { height: auto; min-height: 100vh; }
+    .content { flex-direction: column; }
   }
 </style>

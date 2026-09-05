@@ -11,6 +11,7 @@
   let err: string | null = $state(null)
 
   async function submit() {
+    if (busy || code.length < 23) return
     busy = true; err = null
     // Trim guards against trailing whitespace from paste — common UX paper-cut.
     const trimmed = code.trim()
@@ -23,24 +24,27 @@
   }
 </script>
 
-<section class="onboard">
+<form class="onboard" aria-busy={busy} onsubmit={(e) => { e.preventDefault(); void submit() }}>
   <h2>{t('chat.connectTitle')}</h2>
-  <p>{t('chat.enterPairingCode')}</p>
+  <p id="pairing-hint">{t('chat.enterPairingCode')}</p>
   <label>{t('chat.pairingCode')}
-    <input bind:value={code} placeholder="abc-def-012-345-678-9ab" />
+    <input bind:value={code} aria-describedby="pairing-hint" placeholder="abc-def-012-345-678-9ab" autocomplete="off" autocapitalize="none" spellcheck="false" disabled={busy} />
   </label>
   <label>{t('chat.deviceNameOptional')}
-    <input bind:value={hostname} placeholder="my-laptop" />
+    <input bind:value={hostname} placeholder="my-laptop" disabled={busy} />
   </label>
-  {#if err}<p class="err">{err}</p>{/if}
-  <button disabled={busy || code.length < 23} onclick={submit}>{busy ? t('chat.connecting') : t('chat.pair')}</button>
-</section>
+  {#if err}<p class="err" role="alert">{err}</p>{/if}
+  <button disabled={busy || code.length < 23} type="submit">{busy ? t('chat.connecting') : t('chat.pair')}</button>
+</form>
 
 <style>
-  .onboard { max-width: 360px; margin: 4rem auto; padding: 1.5rem; border: 1px solid #e5e7eb; border-radius: 8px; }
-  label { display: block; margin: 0.75rem 0; }
-  input { width: 100%; padding: 0.4rem; }
-  .err { color: #b91c1c; }
-  button { width: 100%; padding: 0.5rem; background: #2563eb; color: white; border: 0; border-radius: 6px; cursor: pointer; }
-  button:disabled { background: #9ca3af; }
+  .onboard { max-width: 400px; box-sizing: border-box; margin: 24px auto; padding: 24px; border: 1px solid var(--ui-separator); border-radius: 14px; background: var(--ui-surface); }
+  h2 { margin: 0 0 10px; font-size: 20px; }
+  p { font-size: 13px; line-height: 1.5; color: var(--ui-secondary); }
+  label { display: block; margin: 18px 0; font-weight: 600; }
+  input { display: block; width: 100%; margin-top: 6px; padding: 8px; border: 1px solid var(--ui-control-border); border-radius: 7px; background: var(--ui-bg); color: CanvasText; font-weight: 400; }
+  .err { color: var(--ui-danger); overflow-wrap: anywhere; }
+  button { width: 100%; padding: 8px 12px; background: var(--ui-accent); color: var(--ui-accent-foreground); border: 1px solid var(--ui-accent); border-radius: 7px; cursor: pointer; }
+  button:disabled { opacity: 0.5; }
+  @media (max-width: 440px) { .onboard { margin: 16px 12px; padding: 20px; } }
 </style>

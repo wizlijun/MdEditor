@@ -16,6 +16,7 @@
   // CANONICAL COPY: src/lib/agent-picker/AgentPicker.svelte. The plugin copies
   // are kept byte-identical by a test (see agent-picker.copies.test.ts); edit
   // this file and rerun `node scripts/sync-agent-picker.mjs`.
+  import { tick } from 'svelte'
   import { placeMenu, type AgentOption, type Placement } from './types'
 
   let { options, selected, disabled = false, onselect, label }: {
@@ -77,6 +78,7 @@
   function choose(id: string) {
     onselect(id)
     open = false
+    trigger?.focus()
   }
 
   // Click-away and Escape. A menu you cannot dismiss without choosing is a
@@ -90,13 +92,37 @@
     at = null
     // Measure once the menu is in the DOM. Until `at` is set it renders
     // off-screen (see the style), so nothing flashes in the wrong corner.
-    requestAnimationFrame(reposition)
+    const frame = requestAnimationFrame(async () => {
+      reposition()
+      // Browsers cannot focus an item while the measured menu is still hidden.
+      await tick()
+      if (!open || !menuEl?.isConnected) return
+      const items = menuEl?.querySelectorAll<HTMLButtonElement>('[role=menuitemradio]')
+      const current = Array.from(items ?? []).find((item) => item.getAttribute('aria-checked') === 'true')
+      ;(current ?? items?.[0])?.focus({ preventScroll: true })
+    })
     const away = (e: MouseEvent) => {
       const t = e.target as Node
       if (root && !root.contains(t) && menuEl && !menuEl.contains(t)) open = false
     }
     const key = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') open = false
+      if (e.defaultPrevented || e.isComposing) return
+      if (e.key === 'Escape') {
+        e.preventDefault()
+        e.stopPropagation()
+        open = false
+        trigger?.focus()
+      } else if (menuEl?.contains(e.target as Node)) {
+        if (e.key === 'Tab') { open = false; trigger?.focus(); return }
+        if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(e.key)) return
+        const items = Array.from(menuEl.querySelectorAll<HTMLButtonElement>('[role=menuitemradio]'))
+        if (!items.length) return
+        e.preventDefault()
+        const current = items.indexOf(document.activeElement as HTMLButtonElement)
+        const next = e.key === 'Home' ? 0 : e.key === 'End' ? items.length - 1
+          : (current + (e.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length
+        items[next]?.focus()
+      }
     }
     const move = () => reposition()
     document.addEventListener('mousedown', away, true)
@@ -105,6 +131,7 @@
     window.addEventListener('scroll', move, true)
     window.addEventListener('resize', move)
     return () => {
+      cancelAnimationFrame(frame)
       document.removeEventListener('mousedown', away, true)
       document.removeEventListener('keydown', key)
       window.removeEventListener('scroll', move, true)
@@ -129,6 +156,9 @@
       aria-expanded={open}
       title={current ? detail(current) : ''}
       onclick={() => (open = !open)}
+      onkeydown={(event) => {
+        if (event.key === 'ArrowDown' || event.key === 'ArrowUp') { event.preventDefault(); open = true }
+      }}
     >
       {label('agentPicker.by', { name: shortName(current) })}
       <span class="caret" aria-hidden="true">▾</span>
@@ -139,17 +169,19 @@
            clipped by the first scrolling ancestor — the sidecar panel, the
            ebook queue — long before it ever reached a window edge. -->
       <div
-        class="menu"
+        class="menu menu-panel"
         class:up={at?.side === 'up'}
         bind:this={menuEl}
         role="menu"
+        aria-label={label('agentPicker.by', { name: shortName(current) })}
         style={at ? `top:${at.top}px; left:${at.left}px` : 'top:0; left:0; visibility:hidden'}
       >
         {#each options as o (o.id)}
           <button
             role="menuitemradio"
             aria-checked={o.id === selected}
-            class="item"
+            class="item menu-row"
+            tabindex="-1"
             class:bad={o.harness ? !o.harness.ok : false}
             onclick={() => choose(o.id)}
           >
@@ -171,7 +203,7 @@
      drifts out of alignment at larger UI font sizes. */
   .by {
     font: inherit;
-    font-size: 11px;
+    font-size: 12px;
     display: inline-flex;
     align-items: center;
     gap: 3px;
@@ -179,8 +211,7 @@
     border: 0;
     border-radius: 5px;
     background: none;
-    color: inherit;
-    opacity: 0.6;
+    color: var(--ui-secondary, CanvasText);
     cursor: pointer;
     white-space: nowrap;
   }
@@ -195,12 +226,10 @@
     position: fixed;
     z-index: 9998;
     min-width: 210px;
-    padding: 4px;
-    border-radius: 8px;
-    border: 1px solid color-mix(in srgb, currentColor 18%, transparent);
-    background: var(--bg-color, Canvas);
-    color: inherit;
-    box-shadow: 0 6px 22px rgba(0, 0, 0, 0.22);
+    max-width: calc(100vw - 24px);
+    max-height: calc(100vh - 24px);
+    overflow: auto;
+    box-sizing: border-box;
   }
   .item {
     font: inherit;
@@ -216,13 +245,12 @@
     text-align: left;
     cursor: pointer;
   }
-  .item:hover { background: color-mix(in srgb, currentColor 12%, transparent); }
   .tick { flex: none; width: 11px; font-size: 11px; line-height: 1.5; }
   .text { display: flex; flex-direction: column; min-width: 0; }
-  .nm { font-size: 12px; }
+  .nm { font-size: 13px; }
   .dt {
-    font-size: 10px;
-    opacity: 0.6;
+    font-size: 12px;
+    color: var(--ui-secondary, CanvasText);
     font-family: ui-monospace, SFMono-Regular, monospace;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -230,5 +258,6 @@
   }
   /* A harness that cannot run is still selectable — you may be about to fix it
      — but it must not look like a working one. */
-  .item.bad .dt { color: #d9534f; opacity: 0.95; }
+  .item.bad .dt { color: var(--ui-danger, #b42318); }
+  .menu-panel .menu-row:hover .dt { color: inherit; }
 </style>

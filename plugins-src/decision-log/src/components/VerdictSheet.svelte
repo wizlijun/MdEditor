@@ -7,6 +7,7 @@
      On submit calls doVerdict, resolved = today. Coach tone: a miss is NOT
      rendered as failure (spec §3 S5 / §7.4). -->
 <script lang="ts">
+  import { modalFocus } from '../../../../src/lib/ui/modal-focus'
   import type { OpenDecision, Outcome, WeakestElement } from '../lib/model'
   import type { Closure } from '../lib/candidate'
   import { OUTCOMES, WEAKEST_ELEMENTS } from '../lib/model'
@@ -40,6 +41,7 @@
   let weakest = $state<WeakestElement | null>(null)
   let submitting = $state(false)
   let error = $state('')
+  function close(): void { if (!submitting) onClose() }
 
   const evidence = $derived(closure?.evidence ?? [])
   // Progress notes appended over the decision's life (accepted "note"/progress
@@ -71,11 +73,9 @@
   }
 </script>
 
-<svelte:window onkeydown={(e) => { if (e.key === 'Escape') onClose() }} />
-
-<div class="overlay" onclick={onClose} role="presentation">
+<div class="overlay" onclick={close} role="presentation">
   <!-- svelte-ignore a11y_click_events_have_key_events -->
-  <div class="sheet" onclick={(e) => e.stopPropagation()} role="dialog" aria-modal="true" tabindex="-1">
+  <div class="sheet" onclick={(e) => e.stopPropagation()} role="dialog" aria-modal="true" aria-busy={submitting} aria-label={t('verdict.submit')} tabindex="-1" use:modalFocus={{ onClose: close, canClose: () => !submitting }}>
     <!-- read-only, locked context -->
     <div class="locked">
       <span class="lock" title={t('verdict.locked')}>🔒</span>
@@ -118,6 +118,7 @@
             type="button"
             class="choice"
             class:active={outcome === o}
+            aria-pressed={outcome === o}
             onclick={() => (outcome = o)}
           >
             {o === 'hit' ? '✅' : o === 'partial' ? '◐' : '·'}
@@ -131,10 +132,10 @@
     <div class="question">
       <p class="q">{t('verdict.q2')}</p>
       <div class="choices">
-        <button type="button" class="choice" class:active={stillEndorse === true} onclick={() => (stillEndorse = true)}>
+        <button type="button" class="choice" class:active={stillEndorse === true} aria-pressed={stillEndorse === true} onclick={() => (stillEndorse = true)}>
           {t('verdict.endorseYes')}
         </button>
-        <button type="button" class="choice" class:active={stillEndorse === false} onclick={() => (stillEndorse = false)}>
+        <button type="button" class="choice" class:active={stillEndorse === false} aria-pressed={stillEndorse === false} onclick={() => (stillEndorse = false)}>
           {t('verdict.endorseNo')}
         </button>
       </div>
@@ -150,6 +151,7 @@
               type="button"
               class="el-chip"
               class:active={weakest === el}
+              aria-pressed={weakest === el}
               onclick={() => (weakest = weakest === el ? null : el)}
             >
               {t(`el.${el}` as 'el.frame')}
@@ -159,10 +161,10 @@
       </div>
     {/if}
 
-    {#if error}<p class="err">{error}</p>{/if}
+    {#if error}<p class="err" role="alert">{error}</p>{/if}
 
     <div class="actions">
-      <button type="button" class="ghost" onclick={onClose}>{t('common.cancel')}</button>
+      <button type="button" class="ghost" disabled={submitting} onclick={close}>{t('common.cancel')}</button>
       <button type="button" class="primary" disabled={!canSubmit} onclick={submit}>
         {t('verdict.submit')}
       </button>
@@ -212,7 +214,7 @@
     background: transparent; color: inherit; font: inherit; font-size: 0.82rem; cursor: pointer;
   }
   .el-chip.active { background: var(--accent, #2563eb); color: #fff; border-color: var(--accent, #2563eb); }
-  .err { color: #dc2626; font-size: 0.85rem; margin: 0 0 0.5rem; }
+  .err { color: var(--ui-danger); font-size: 0.85rem; margin: 0 0 0.5rem; }
   .actions { display: flex; justify-content: flex-end; gap: 0.5rem; margin-top: 0.5rem; }
   button.primary { padding: 0.5rem 1rem; border: 0; border-radius: 6px; background: var(--accent, #2563eb); color: #fff; cursor: pointer; }
   button.primary:disabled { opacity: 0.5; cursor: not-allowed; }

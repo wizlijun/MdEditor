@@ -2,13 +2,15 @@
 <script lang="ts">
   import type { Message } from '../../lib/openclaw/protocol'
   import { openVaultLink } from '../../lib/openclaw/links'
-  import { state } from '../../lib/openclaw/client.svelte'
+  import { state as clientState } from '../../lib/openclaw/client.svelte'
+  import { describeError } from '../../lib/errors'
   import { t, type MessageKey } from '../../lib/strings'
 
   let { message }: { message: Message } = $props()
+  let linkError = $state('')
 
   function renderText(t: string): { html: string } {
-    const escaped = t.replace(/[&<>]/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;'} as Record<string,string>)[c])
+    const escaped = t.replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'} as Record<string,string>)[c])
     const linked = escaped.replace(
       /\[([^\]]+)\]\(([^)]+)\)/g,
       (_m, label, href) => `<a href="${href}" data-link>${label}</a>`
@@ -22,7 +24,7 @@
     return {
       vaultRoot: null as string | null,
       isBoundMode: false,
-      currentSession: state.currentSessionId,
+      currentSession: clientState.currentSessionId,
       autoSync: true,
     }
   }
@@ -33,21 +35,27 @@
     if (!a) return
     e.preventDefault()
     const href = a.getAttribute('href') ?? ''
-    openVaultLink(href, getOpts())
+    linkError = ''
+    void openVaultLink(href, getOpts()).catch((error) => { linkError = describeError(String(error)) })
   }
 </script>
 
-<div class="bubble" class:user={message.role === 'user'} class:agent={message.role === 'agent'} onclick={onClick}>
+<!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_noninteractive_element_interactions (Delegation only: generated native anchors already support Enter and Tab.) -->
+<article class="bubble" class:user={message.role === 'user'} class:agent={message.role === 'agent'} onclick={onClick}>
   <div class="role">{t(('chat.role.' + message.role) as MessageKey)}</div>
   <div class="text">{@html renderText(message.text).html}{#if message.streaming}<span class="cursor">▍</span>{/if}</div>
-</div>
+  {#if linkError}<p class="error" role="alert">{linkError}</p>{/if}
+</article>
 
 <style>
-  .bubble { padding: 0.5rem 0.75rem; margin: 0.25rem 0; border-radius: 8px; }
-  .bubble.user { background: #2563eb; color: white; align-self: flex-end; max-width: 80%; margin-left: auto; }
-  .bubble.agent { background: #f3f4f6; color: #111; max-width: 80%; }
-  .role { font-size: 0.7rem; opacity: 0.6; text-transform: uppercase; }
-  .text { white-space: pre-wrap; word-break: break-word; }
-  .cursor { animation: blink 1s steps(1) infinite; opacity: 0.5; }
+  .bubble { padding: 10px 12px; margin: 4px 0; border-radius: 10px; border: 1px solid var(--ui-separator); min-width: 0; max-width: 90%; background: var(--ui-surface); color: CanvasText; }
+  .bubble.user { background: var(--ui-selection); align-self: flex-end; margin-left: auto; }
+  .bubble.agent { align-self: flex-start; }
+  .role { font-size: 12px; color: var(--ui-secondary); font-weight: 600; margin-bottom: 4px; }
+  .text { white-space: pre-wrap; overflow-wrap: anywhere; }
+  .text :global(a) { color: var(--ui-accent-text); text-underline-offset: 2px; }
+  .error { color: var(--ui-danger); font-size: 12px; overflow-wrap: anywhere; }
+  .cursor { animation: blink 1s steps(1) infinite; }
   @keyframes blink { 50% { opacity: 0; } }
+  @media (prefers-reduced-motion: reduce) { .cursor { animation: none; } }
 </style>

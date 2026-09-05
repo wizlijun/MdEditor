@@ -6,6 +6,7 @@
      (manual origin). created = today ISO. prediction/confidence/premortem/
      alternatives have NO edit entry after signing — set only here. -->
 <script lang="ts">
+  import { modalFocus } from '../../../../src/lib/ui/modal-focus'
   import type { NewCandidate } from '../lib/candidate'
   import type { Confidence, Trigger } from '../lib/model'
   import ConfidenceBar from './ConfidenceBar.svelte'
@@ -45,6 +46,7 @@
   let triggerText = $state(seed?.triggers?.map((tr) => tr.if).join('\n') ?? '')
   let submitting = $state(false)
   let error = $state('')
+  function close(): void { if (!submitting) onClose() }
 
   const canSubmit = $derived(
     !!title.trim() && !!prediction.trim() && !!confidence && !!checkDate && !submitting
@@ -108,12 +110,10 @@
   }
 </script>
 
-<svelte:window onkeydown={(e) => { if (e.key === 'Escape') onClose() }} />
-
-<div class="overlay" onclick={onClose} role="presentation">
+<div class="overlay" onclick={close} role="presentation">
   <!-- svelte-ignore a11y_click_events_have_key_events -->
-  <div class="sheet" onclick={(e) => e.stopPropagation()} role="dialog" aria-modal="true" tabindex="-1">
-    <h2>{candidate ? t('sign.title') : t('sign.title.new')}</h2>
+  <div class="sheet" onclick={(e) => e.stopPropagation()} role="dialog" aria-modal="true" aria-busy={submitting} aria-labelledby="sign-title" tabindex="-1" use:modalFocus={{ onClose: close, canClose: () => !submitting }}>
+    <h2 id="sign-title">{candidate ? t('sign.title') : t('sign.title.new')}</h2>
 
     <label class="field">
       <span class="lbl">{t('sign.titleLabel')}</span>
@@ -169,10 +169,10 @@
       <textarea bind:value={triggerText} rows="4" placeholder={t('sign.triggersHint')}></textarea>
     </label>
 
-    {#if error}<p class="err">{error}</p>{/if}
+    {#if error}<p class="err" role="alert">{error}</p>{/if}
 
     <div class="actions">
-      <button type="button" class="ghost" onclick={onClose}>{t('common.cancel')}</button>
+      <button type="button" class="ghost" disabled={submitting} onclick={close}>{t('common.cancel')}</button>
       <button type="button" class="primary" disabled={!canSubmit} onclick={submit}>
         {t('sign.submit')}
       </button>
@@ -194,10 +194,10 @@
   .field { display: block; margin-bottom: 0.9rem; }
   .lbl { display: block; font-size: 0.8rem; opacity: 0.7; margin-bottom: 0.35rem; }
   .why {
-    display: block; font-size: 0.72rem; line-height: 1.45;
-    opacity: 0.5; margin: -0.15rem 0 0.35rem;
+    display: block; font-size: 12px; line-height: 1.45;
+    color: var(--ui-secondary); margin: -0.15rem 0 0.35rem;
   }
-  .req { color: #dc2626; }
+  .req { color: var(--ui-danger); }
   input, textarea {
     width: 100%; box-sizing: border-box; padding: 0.5rem; border: 1px solid var(--line, #d1d5db);
     border-radius: 6px; font: inherit; background: var(--input-bg, Field); color: FieldText;
@@ -206,7 +206,7 @@
   .quoted-lead { margin: 0 0 0.25rem; font-size: 0.8rem; opacity: 0.7; }
   .quote { margin: 0 0 0.9rem; padding: 0.5rem 0.75rem; border-left: 3px solid var(--accent, #2563eb);
     background: color-mix(in srgb, currentColor 5%, transparent); border-radius: 0 6px 6px 0; }
-  .err { color: #dc2626; font-size: 0.85rem; margin: 0 0 0.5rem; }
+  .err { color: var(--ui-danger); font-size: 0.85rem; margin: 0 0 0.5rem; }
   .actions { display: flex; justify-content: flex-end; gap: 0.5rem; margin-top: 0.5rem; }
   button.primary { padding: 0.5rem 1rem; border: 0; border-radius: 6px; background: var(--accent, #2563eb); color: #fff; cursor: pointer; }
   button.primary:disabled { opacity: 0.5; cursor: not-allowed; }

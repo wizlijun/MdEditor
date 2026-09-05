@@ -1,4 +1,5 @@
 <script lang="ts">
+  import '../../../src/styles/ui-foundation.css'
   import { bridge, vaultInfo, vaultList, vaultExists, openInEditor, toast } from './lib/bridge'
   import {
     buildIndex, buildDayIndex, parseDiaryName, parseDailyNoteName,
@@ -17,6 +18,7 @@
   let noteByYear = $state<Map<number, Map<string, string>>>(new Map())
   let selectedYear = $state<number>(new Date().getFullYear())
   let loading = $state(true)
+  let scanError = $state('')
   let noVault = $state(false)
   let vaultRoot: string | null = null
 
@@ -48,7 +50,7 @@
   }
   function scrollToToday() {
     requestAnimationFrame(() =>
-      document.getElementById('wr-today')?.scrollIntoView({ block: 'center', behavior: 'smooth' }),
+      document.getElementById('wr-today')?.scrollIntoView({ block: 'center', behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' }),
     )
   }
 
@@ -71,6 +73,7 @@
   }
 
   async function scan(force = false) {
+    scanError = ''
     try {
       const info = await vaultInfo()
       vaultRoot = info.root
@@ -104,6 +107,7 @@
       await ensureYear(selectedYear)
       if (selectedYear === currentYear) scrollToToday()
     } catch (e) {
+      scanError = String(e)
       await toast('error', t('title'), String(e))
     } finally {
       loading = false
@@ -120,7 +124,7 @@
   scan()
 </script>
 
-<div class="app">
+<div class="app ui-surface">
   <header class="head">
     <div class="yearart">{selectedYear}</div>
     <div class="subtitle">{t('title')}</div>
@@ -129,7 +133,7 @@
       <button class="arrow" onclick={() => stepYear(-1)} aria-label={t('nav.prevYear')}>‹</button>
       <div class="years">
         {#each years as y}
-          <button class="ychip" class:active={y === selectedYear} onclick={() => selectYear(y)}>{y}</button>
+          <button class="ychip" aria-pressed={y === selectedYear} class:active={y === selectedYear} onclick={() => selectYear(y)}>{y}</button>
         {/each}
       </div>
       <button class="arrow" onclick={() => stepYear(1)} aria-label={t('nav.nextYear')}>›</button>
@@ -137,6 +141,7 @@
       <button class="tbtn" onclick={() => scan(true)}>↻ {t('rebuild')}</button>
     </div>
   </header>
+  {#if scanError}<p class="scan-error" role="alert">{scanError}</p>{/if}
 
   {#if noVault}
     <div class="empty">{t('empty.noVault')}</div>
@@ -169,17 +174,19 @@
   }
   :global(html), :global(body) { height: 100%; }
   :global(body) { margin: 0; background: var(--bg); color: var(--fg); font: 12px/1.3 -apple-system, 'SF Pro Text', 'PingFang SC', system-ui, sans-serif; }
-  .app { height: 100vh; overflow: hidden; display: flex; flex-direction: column; }
+  .app { height: 100vh; overflow: auto; display: flex; flex-direction: column; --muted: var(--ui-secondary); --chip-active: var(--ui-accent); --past-day: var(--ui-secondary); --future-day: var(--ui-tertiary); --accent: var(--ui-accent); }
   .head { flex: 0 0 auto; display: flex; align-items: center; gap: 16px; padding: 10px 20px 6px; }
   .yearart { font-family: 'Snell Roundhand', 'Zapfino', 'Brush Script MT', cursive; font-weight: 700; font-style: italic; font-size: 46px; line-height: 1; color: var(--yearart); }
   .subtitle { font-size: 12px; color: var(--muted); font-weight: 600; letter-spacing: 3px; }
   .spacer { flex: 1; }
-  .toolbar { display: flex; align-items: center; gap: 7px; }
+  .toolbar { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; min-width: 0; }
   .arrow { width: 26px; height: 26px; border-radius: 7px; border: 1px solid var(--line); background: var(--chip-bg); color: var(--fg); font-size: 14px; cursor: pointer; }
-  .years { display: flex; gap: 5px; }
+  .years { display: flex; gap: 5px; max-width: 240px; overflow-x: auto; padding: 3px; }
   .ychip { padding: 4px 10px; border-radius: 20px; background: var(--chip-bg); color: var(--fg); font-weight: 600; font-size: 12px; cursor: pointer; border: none; }
   .ychip.active { background: var(--chip-active); color: #fff; }
   .tbtn { display: flex; align-items: center; gap: 5px; padding: 5px 10px; border-radius: 8px; border: 1px solid var(--line); background: var(--chip-bg); color: var(--fg); font-weight: 600; font-size: 12px; cursor: pointer; }
-  .tbtn.accent { border-color: var(--accent); color: var(--accent); background: transparent; }
+  .tbtn.accent { border-color: var(--ui-accent-text); color: var(--ui-accent-text); background: transparent; }
   .empty { flex: 1 1 auto; display: flex; align-items: center; justify-content: center; padding: 40px; text-align: center; color: var(--muted); font-size: 13px; }
+  .scan-error { color: var(--ui-danger); margin: 8px 20px; overflow-wrap: anywhere; }
+  @media (max-width: 860px) { .head { flex-wrap: wrap; } .toolbar { width: 100%; } .spacer { display: none; } }
 </style>

@@ -44,6 +44,8 @@
      The kit owns the theme (it fetches and watches the host's compiled CSS) —
      nothing here touches it. -->
 <script lang="ts">
+  import '../../../src/styles/ui-foundation.css'
+  import { modalFocus } from '../../../src/lib/ui/modal-focus'
   import { onMount, tick } from 'svelte'
   import Celebration from './components/Celebration.svelte'
   import Icon from './components/Icon.svelte'
@@ -510,11 +512,6 @@
     }
   }
 
-  /** Focuses the agent-missing layer so Esc reaches it (see its `onkeydown`). */
-  function takeFocus(node: HTMLElement) {
-    node.focus()
-  }
-
   onMount(() => {
     let disposed = false
 
@@ -664,7 +661,7 @@
   })
 </script>
 
-<main class="app">
+<main class="app ui-surface">
   {#if store.needVault}
     <div class="notice">{t('needVault')}</div>
   {:else}
@@ -812,14 +809,7 @@
       aria-modal="true"
       aria-labelledby="agent-missing-title"
       tabindex="-1"
-      use:takeFocus
-      onkeydown={(e) => {
-        if (e.key === 'Escape') {
-          e.preventDefault()
-          e.stopPropagation()
-          agentMissing = false
-        }
-      }}
+      use:modalFocus={{ onClose: () => (agentMissing = false) }}
     >
       <h2 id="agent-missing-title">{t('agentMissing')}</h2>
       <p>{t('agentMissingHint')}</p>
@@ -843,6 +833,8 @@
     color: CanvasText;
   }
   .app {
+    --line: var(--ui-separator);
+    --accent: var(--ui-accent);
     display: flex;
     flex-direction: column;
     height: 100vh;
@@ -934,7 +926,7 @@
     padding: 0;
     border: 0;
     background: none;
-    color: #dc2626;
+    color: var(--ui-danger);
     font: inherit;
     font-size: 0.78rem;
     cursor: pointer;

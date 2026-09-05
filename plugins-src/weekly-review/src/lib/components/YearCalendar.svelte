@@ -29,8 +29,8 @@
 </div>
 
 <style>
-  .cal { flex: 1 1 auto; display: grid; grid-template-columns: repeat(4, 1fr); grid-template-rows: repeat(3, 1fr); gap: 10px 16px; padding: 6px 20px 8px; min-height: 0; }
-  .legend { flex: 0 0 auto; display: flex; gap: 14px; margin: 0 20px; padding: 8px 0 10px; border-top: 1px solid var(--line); font-size: 11px; color: var(--muted); flex-wrap: wrap; align-items: center; }
+  .cal { flex: 1 0 auto; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); grid-auto-rows: minmax(160px, 1fr); gap: 16px; padding: 6px 20px 8px; }
+  .legend { flex: 0 0 auto; display: flex; gap: 14px; margin: 0 20px; padding: 8px 0 10px; border-top: 1px solid var(--line); font-size: 12px; color: var(--muted); flex-wrap: wrap; align-items: center; }
   .legend .it { display: flex; align-items: center; gap: 5px; }
   .sw { width: 20px; height: 13px; border-radius: 4px; }
   .sw.review { background: var(--accent); }
@@ -38,4 +38,6 @@
   .sw.past { background: var(--past); }
   .lk { color: var(--link); text-decoration: underline; font-weight: 800; }
   .star { width: 13px; height: 13px; fill: var(--note); }
+  @media (max-width: 900px) { .cal { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+  @media (max-width: 680px) { .cal { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 </style>

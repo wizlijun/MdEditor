@@ -416,11 +416,13 @@
 
 <style>
   .board-wrap {
+    min-width: 0;
     flex: 1;
     display: flex;
     flex-direction: column;
     min-height: 0;
   }
+  @media (max-width: 660px) { .board-wrap { flex: none; height: 480px; } }
   /* While a lane drag is in flight the whole board shows the grabbing cursor. */
   .board-wrap.dragging-active,
   .board-wrap.dragging-active :global(.card) { cursor: grabbing; }
@@ -446,7 +448,7 @@
     cursor: pointer;
     opacity: 0.85;
   }
-  .refresh-btn:hover:not(:disabled) { opacity: 1; border-color: var(--accent, #2563eb); }
+  .refresh-btn:hover:not(:disabled) { opacity: 1; background: var(--ui-hover); }
   .refresh-btn:disabled { cursor: default; opacity: 0.55; }
   .refresh-icon { display: inline-block; line-height: 1; }
   .refresh-btn.spinning .refresh-icon { animation: dl-spin 0.8s linear infinite; }
@@ -480,11 +482,11 @@
   .board {
     flex: 1;
     display: grid;
-    grid-template-columns: repeat(3, 1fr);
+    grid-template-columns: repeat(3, minmax(160px, 1fr));
     gap: 0.75rem;
     padding: 1rem;
     min-height: 0;
-    overflow: hidden;
+    overflow-x: auto;
   }
   .col {
     display: flex;
@@ -536,7 +538,7 @@
     text-overflow: ellipsis;
     z-index: 60;
   }
-  .empty { margin: 0.5rem 0; font-size: 0.82rem; opacity: 0.5; line-height: 1.4; }
+  .empty { margin: 0.5rem 0; font-size: 13px; color: var(--ui-secondary); line-height: 1.4; }
   .new-btn {
     margin: 0 0.6rem 0.6rem;
     padding: 0.5rem;

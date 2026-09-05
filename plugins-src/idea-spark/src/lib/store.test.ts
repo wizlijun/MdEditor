@@ -1035,6 +1035,21 @@ describe('commitIdeaDir', () => {
     expect(ok).toBe(false)
     expect(state.ideaDir).toBe('inbox/ideas')
   })
+
+  it('keeps the directory and document attached after a failed settings write, then retries', async () => {
+    state.current = 'original.md'
+    state.currentFrontmatter = 'type: Idea'
+    host.vaultWrite.mockRejectedValueOnce(new Error('settings write refused'))
+    await expect(commitIdeaDir('elsewhere', async () => true)).rejects.toThrow('settings write refused')
+    expect(state.ideaDir).toBe('inbox/ideas')
+    expect(state.current).toBe('original.md')
+    expect(state.currentFrontmatter).toBe('type: Idea')
+    expect(state.busy).toBe(false)
+    expect(host.vaultList).not.toHaveBeenCalled()
+    expect(await commitIdeaDir('elsewhere', async () => true)).toBe(true)
+    expect(state.ideaDir).toBe('elsewhere')
+    expect(state.current).toBeNull()
+  })
 })
 
 describe('loadIdea', () => {

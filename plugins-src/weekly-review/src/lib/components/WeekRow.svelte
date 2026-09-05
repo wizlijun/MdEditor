@@ -69,7 +69,7 @@
   .wk.review { background: var(--accent); }
   .wk.review.clickable { cursor: pointer; }
   .wk.today { outline: 2px solid var(--today-ring); outline-offset: 1px; }
-  .day { position: relative; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 600; min-width: 0; }
+  .day { position: relative; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 600; min-width: 0; }
   .wk.past .day { color: var(--past-day); }
   .wk.future .day { color: var(--future-day); }
   .day.we { color: var(--weekend); }

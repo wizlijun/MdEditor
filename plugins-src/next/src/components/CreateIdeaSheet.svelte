@@ -132,7 +132,7 @@
   .sheet { width: min(560px, 100%); max-height: calc(100vh - 48px); overflow: auto; box-sizing: border-box; border: 1px solid var(--line); border-radius: 20px; background: var(--sheet); color: var(--fg); box-shadow: 0 24px 80px color-mix(in srgb, #000 30%, transparent); }
   header { display: flex; justify-content: space-between; gap: 16px; padding: 22px 24px 15px; }
   h2 { margin: 0; font-size: 19px; line-height: 1.3; }
-  header p { margin: 5px 0 0; color: var(--muted); font-size: 11px; overflow-wrap: anywhere; }
+  header p { margin: 5px 0 0; color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
   .close { width: 28px; height: 28px; border: none; border-radius: 50%; background: var(--chip); color: var(--muted-strong); font-size: 20px; line-height: 1; cursor: pointer; }
   form { display: grid; gap: 8px; padding: 18px 24px 22px; border-top: 1px solid var(--line); }
   label { font-size: 12px; font-weight: 650; }
@@ -143,7 +143,7 @@
   textarea[aria-invalid="true"] { border-color: var(--danger); }
   .error { margin: 0; color: var(--danger); font-size: 12px; }
   footer { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding-top: 8px; }
-  footer > span { color: var(--muted); font-size: 11px; }
+  footer > span { color: var(--muted); font-size: 12px; }
   footer > div { display: flex; gap: 8px; }
   footer button { border-radius: 9px; padding: 8px 14px; font: inherit; font-weight: 650; cursor: pointer; }
   footer button:disabled { opacity: 0.45; cursor: default; }
