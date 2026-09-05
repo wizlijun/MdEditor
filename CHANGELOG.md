@@ -10,6 +10,7 @@ For the full commit history, see the git log.
 ### Changed
 
 - **All 16 production plugins receive a coordinated release.** OpenClaw joins the marketplace for the first time; the developer fixture is excluded. Update note.md first, then update plugins and restart. Memory 2.5.2 requires note.md 6.906.1 or newer for the completed document editor; back up collaborative documents before upgrading, and restore matching data and software together if rolling back.
+- **Memory upgrade note:** the next successful save upgrades shared-document state to v6. Before upgrading, save or export unsaved drafts and back up both the Markdown document and `plugin_data/notemd.memory/` in the app data directory. Older plugins cannot read v6; downgrading only the plugin is not a rollback.
 - **Settings and plugin windows share a clearer, keyboard-friendly interface.** Settings keep navigation and actions visible in narrow windows. Plugin windows use readable supporting text, consistent light/dark colors, visible focus and shared popup menus while retaining their individual workflows. Settings and confirmation dialogs preserve in-progress work and explain failed saves; Agent chat retains unsent drafts when reconnecting.
 
 ### Fixed
