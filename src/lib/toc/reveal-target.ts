@@ -1,9 +1,34 @@
+import type { PositionedHeading } from './active-heading'
+
 interface RichRevealTarget {
   text: string
   headingIndex?: number
 }
 
 const HEADING_SELECTOR = 'h1,h2,h3,h4,h5,h6'
+
+/** Top-level headings share one index space with the Markdown TOC parser. */
+export function getRichHeadingElements(host: HTMLElement): Element[] {
+  const editor = host.querySelector('.ProseMirror')
+  return editor
+    ? Array.from(editor.children).filter((element) => element.matches(HEADING_SELECTOR))
+    : []
+}
+
+export function getPositionedRichHeadings(
+  host: HTMLElement,
+  allowedHeadingIndexes: ReadonlySet<number>,
+  scrollerTop: number,
+  scrollTop: number,
+): PositionedHeading[] {
+  return getRichHeadingElements(host).flatMap((element, headingIndex) => {
+    if (!allowedHeadingIndexes.has(headingIndex)) return []
+    return [{
+      headingIndex,
+      position: element.getBoundingClientRect().top - scrollerTop + scrollTop,
+    }]
+  })
+}
 
 /**
  * Resolve a reveal request against the rendered rich-editor DOM. TOC requests
@@ -15,10 +40,7 @@ export function findRichRevealTarget(
   request: RichRevealTarget,
 ): Element | null {
   if (request.headingIndex != null) {
-    const editor = host.querySelector('.ProseMirror')
-    const headings = editor
-      ? Array.from(editor.children).filter((element) => element.matches(HEADING_SELECTOR))
-      : []
+    const headings = getRichHeadingElements(host)
     const addressed = headings[request.headingIndex]
     if (addressed) return addressed
   }

@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { flushSync, mount, unmount } from 'svelte'
+import { flushSync, mount, tick, unmount } from 'svelte'
 import { createClassComponent } from 'svelte/legacy'
 import type { Tab } from '../../lib/tabs.svelte'
 
@@ -16,6 +16,7 @@ vi.mock('../../lib/side-panel/registry.svelte', () => ({
 
 import { reveal } from '../../lib/outline/reveal.svelte'
 import { t } from '../../lib/i18n/store.svelte'
+import { reportTocLocation, tocLocation } from '../../lib/toc/location.svelte'
 import TocPanel from './TocPanel.svelte'
 
 function tab(overrides: Partial<Tab> = {}): Tab {
@@ -36,16 +37,20 @@ function tab(overrides: Partial<Tab> = {}): Tab {
 }
 
 function render(current: Tab | null) {
-  return mount(TocPanel as unknown as Parameters<typeof mount>[0], {
+  const app = mount(TocPanel as unknown as Parameters<typeof mount>[0], {
     target: document.body,
     props: { tab: current },
   })
+  flushSync()
+  return app
 }
 
 beforeEach(() => {
   document.body.innerHTML = ''
   setSideVisible.mockClear()
   reveal.req = null
+  tocLocation.trackedTabId = null
+  tocLocation.activeHeadingIndex = null
 })
 
 describe('TocPanel', () => {
@@ -92,7 +97,32 @@ describe('TocPanel', () => {
       path: '/vault/article.md',
       headingIndex: 2,
     })
+    expect(rows[2].getAttribute('aria-current')).toBe('location')
     unmount(app)
+  })
+
+  it('highlights and reveals the heading reported by the current editor', async () => {
+    const app = render(tab())
+    const rows = document.body.querySelectorAll<HTMLButtonElement>('.toc-row')
+    const revealRow = vi.fn()
+    Object.defineProperty(rows[1], 'scrollIntoView', { value: revealRow, configurable: true })
+
+    reportTocLocation('article', 1)
+    flushSync()
+    await tick()
+
+    expect(rows[0].classList.contains('current')).toBe(false)
+    expect(rows[1].classList.contains('current')).toBe(true)
+    expect(rows[1].getAttribute('aria-current')).toBe('location')
+    expect(revealRow).toHaveBeenCalledWith({ block: 'nearest' })
+    unmount(app)
+  })
+
+  it('tracks only while the Markdown TOC is mounted', () => {
+    const app = render(tab())
+    expect(tocLocation.trackedTabId).toBe('article')
+    unmount(app)
+    expect(tocLocation).toMatchObject({ trackedTabId: null, activeHeadingIndex: null })
   })
 
   it('shows distinct empty states for no article and no headings', () => {

@@ -1,6 +1,10 @@
 // @vitest-environment happy-dom
-import { describe, expect, it } from 'vitest'
-import { findRichRevealTarget } from './reveal-target'
+import { describe, expect, it, vi } from 'vitest'
+import {
+  findRichRevealTarget,
+  getPositionedRichHeadings,
+  getRichHeadingElements,
+} from './reveal-target'
 
 function host(html: string): HTMLElement {
   const element = document.createElement('div')
@@ -9,6 +13,31 @@ function host(html: string): HTMLElement {
 }
 
 describe('findRichRevealTarget', () => {
+  it('enumerates only direct ProseMirror headings in document order', () => {
+    const root = host([
+      '<h1>First</h1>',
+      '<blockquote><h2>Nested</h2></blockquote>',
+      '<p>Body</p>',
+      '<h3>Second</h3>',
+    ].join(''))
+
+    expect(getRichHeadingElements(root).map((element) => element.textContent))
+      .toEqual(['First', 'Second'])
+  })
+
+  it('maps only visible TOC heading indices into scroll-content coordinates', () => {
+    const root = host('<h1>First</h1><h2>Empty in TOC</h2><h2>Third</h2>')
+    const headings = getRichHeadingElements(root)
+    vi.spyOn(headings[0], 'getBoundingClientRect').mockReturnValue({ top: 120 } as DOMRect)
+    vi.spyOn(headings[1], 'getBoundingClientRect').mockReturnValue({ top: 180 } as DOMRect)
+    vi.spyOn(headings[2], 'getBoundingClientRect').mockReturnValue({ top: 260 } as DOMRect)
+
+    expect(getPositionedRichHeadings(root, new Set([0, 2]), 100, 40)).toEqual([
+      { headingIndex: 0, position: 60 },
+      { headingIndex: 2, position: 200 },
+    ])
+  })
+
   it('addresses top-level headings by index even when titles repeat', () => {
     const root = host([
       '<h1>Repeat</h1>',

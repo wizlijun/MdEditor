@@ -1,18 +1,49 @@
 <script lang="ts">
+  import { tick } from 'svelte'
   import type { Tab } from '../../lib/tabs.svelte'
   import { t } from '../../lib/i18n/store.svelte'
   import { requestReveal } from '../../lib/outline/reveal.svelte'
   import { setSideVisible } from '../../lib/side-panel/registry.svelte'
   import { extractTocHeadings, type TocHeading } from '../../lib/toc/headings'
+  import {
+    beginTocLocationTracking,
+    reportTocLocation,
+    tocLocation,
+  } from '../../lib/toc/location.svelte'
   import SideViewSwitcher from '../side-panel/SideViewSwitcher.svelte'
 
   let { tab }: { tab: Tab | null } = $props()
 
   let applicable = $derived(tab != null && tab.kind === 'markdown')
   let headings = $derived(applicable && tab ? extractTocHeadings(tab.currentContent) : [])
+  let activeHeadingIndex = $derived(
+    tab && tocLocation.trackedTabId === tab.id ? tocLocation.activeHeadingIndex : null,
+  )
+  let tocListEl: HTMLOListElement | undefined = $state()
+
+  // SidePanel only mounts this component while TOC is the visible right view.
+  // Its lifecycle is therefore the tracking gate for both editor modes.
+  $effect(() => {
+    if (!applicable || !tab) return
+    return beginTocLocationTracking(tab.id)
+  })
+
+  $effect(() => {
+    const headingIndex = activeHeadingIndex
+    const list = tocListEl
+    if (headingIndex == null || !list) return
+    void tick().then(() => {
+      const row = Array.from(list.querySelectorAll<HTMLButtonElement>('.toc-row'))
+        .find((button) => Number(button.dataset.headingIndex) === headingIndex)
+      if (row && typeof row.scrollIntoView === 'function') {
+        row.scrollIntoView({ block: 'nearest' })
+      }
+    })
+  })
 
   function jumpTo(heading: TocHeading) {
     if (!tab) return
+    reportTocLocation(tab.id, heading.headingIndex)
     requestReveal(heading.line, heading.text, tab.filePath || null, {
       headingIndex: heading.headingIndex,
     })
@@ -42,14 +73,17 @@
     <div class="body"><p class="empty">{t('toc.empty')}</p></div>
   {:else}
     <nav class="body" aria-label={t('toc.title')}>
-      <ol class="toc-list">
+      <ol class="toc-list" bind:this={tocListEl}>
         {#each headings as heading (`${heading.headingIndex}:${heading.line}`)}
           <li>
             <button
               class="toc-row"
               class:top-level={heading.level === 1}
+              class:current={activeHeadingIndex === heading.headingIndex}
               data-level={heading.level}
+              data-heading-index={heading.headingIndex}
               style={`--toc-depth: ${heading.depth}`}
+              aria-current={activeHeadingIndex === heading.headingIndex ? 'location' : undefined}
               title={t('toc.jumpTo', { line: heading.line, title: heading.text })}
               aria-label={t('toc.jumpTo', { line: heading.line, title: heading.text })}
               onclick={() => jumpTo(heading)}
@@ -110,6 +144,15 @@
     text-align: left;
   }
   .toc-row:hover { background: rgba(0, 0, 0, 0.05); }
+  .toc-row.current,
+  .toc-row.current:hover {
+    background: color-mix(in srgb, var(--accent-color, #4a80d4) 18%, transparent);
+    color: var(--accent-color, #3266b1);
+    box-shadow: inset 3px 0 0 var(--accent-color, #4a80d4);
+  }
+  .toc-row.current .marker { opacity: 1; }
+  .toc-row.current .label { font-weight: 650; }
+  .toc-row.current .line { opacity: 0.64; }
   .toc-row:focus-visible {
     outline: 2px solid var(--accent-color, #4a80d4);
     outline-offset: -2px;
@@ -142,5 +185,10 @@
   @media (prefers-color-scheme: dark) {
     .hbtn:hover,
     .toc-row:hover { background: rgba(255, 255, 255, 0.1); }
+    .toc-row.current,
+    .toc-row.current:hover {
+      background: color-mix(in srgb, var(--accent-color, #72a7ff) 26%, transparent);
+      color: var(--accent-color, #8db7ff);
+    }
   }
 </style>

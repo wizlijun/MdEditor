@@ -18,6 +18,13 @@
   import { createImeGuard } from '../lib/ime'
   import { renderSourceHtml, type HitRange } from '../lib/source-highlight'
   import { handleTextSelectAllKeydown } from '../lib/select-all-shortcut'
+  import { extractTocHeadings } from '../lib/toc/headings'
+  import {
+    isScrollAtEnd,
+    resolveActiveHeadingIndex,
+    sourceViewportAnchorLine,
+  } from '../lib/toc/active-heading'
+  import { reportTocLocation, tocLocation } from '../lib/toc/location.svelte'
 
   let {
     value,
@@ -165,6 +172,55 @@
   // nothing. See src/lib/source-highlight.ts.
   let highlighted = $derived(renderSourceHtml(value, searchMatches, searchIndex))
   let lineCount = $derived(value === '' ? 1 : (value.match(/\n/g)?.length ?? 0) + 1)
+  let tocHeadings = $derived.by(() => {
+    if (!tabId || tocLocation.trackedTabId !== tabId) return []
+    return extractTocHeadings(value)
+  })
+  let tocLocationFrame: number | null = null
+
+  function updateTocLocation() {
+    if (!textareaEl || !tabId || tocLocation.trackedTabId !== tabId) return
+    const style = getComputedStyle(textareaEl)
+    const lineHeight = parseFloat(style.lineHeight) || 20
+    const paddingTop = parseFloat(style.paddingTop) || 0
+    const markerLine = sourceViewportAnchorLine(
+      textareaEl.scrollTop,
+      textareaEl.clientHeight,
+      lineHeight,
+      paddingTop,
+    )
+    reportTocLocation(tabId, resolveActiveHeadingIndex(
+      tocHeadings.map((heading) => ({
+        headingIndex: heading.headingIndex,
+        position: heading.line,
+      })),
+      markerLine,
+      isScrollAtEnd(textareaEl.scrollTop, textareaEl.clientHeight, textareaEl.scrollHeight),
+    ))
+  }
+
+  function scheduleTocLocation() {
+    if (!tabId || tocLocation.trackedTabId !== tabId || tocLocationFrame != null) return
+    tocLocationFrame = requestAnimationFrame(() => {
+      tocLocationFrame = null
+      updateTocLocation()
+    })
+  }
+
+  // Opening TOC or changing the in-memory document should locate immediately;
+  // the user must not need to nudge the editor before the current row appears.
+  $effect(() => {
+    const tracked = !!tabId && tocLocation.trackedTabId === tabId
+    const headings = tocHeadings
+    const editor = textareaEl
+    if (!tracked || !editor) return
+    void headings
+    scheduleTocLocation()
+    return () => {
+      if (tocLocationFrame != null) cancelAnimationFrame(tocLocationFrame)
+      tocLocationFrame = null
+    }
+  })
 
   // Debounced live recompute: when the user types, schedule a chunker +
   // merge run against the persisted yaml. The result becomes the displayed
@@ -264,6 +320,7 @@
       highlightEl.scrollLeft = left
     }
     if (gutterEl) gutterEl.scrollTop = top
+    scheduleTocLocation()
   }
 
   // ── Search / Replace (textarea mode) ──
@@ -297,6 +354,7 @@
     // 估算滚动：行高 × 行号 - 视口的 1/3
     const lineHeight = parseFloat(getComputedStyle(textareaEl).lineHeight) || 20
     textareaEl.scrollTop = Math.max(0, lineIdx * lineHeight - textareaEl.clientHeight / 3)
+    scheduleTocLocation()
   })
 
   function insertAtCursor(tabId: string, text: string) {
