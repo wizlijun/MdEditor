@@ -7,6 +7,8 @@ For the full commit history, see the git log.
 
 ## Unreleased
 
+## v6.905.4 — 2026-09-05
+
 ### Changed
 
 - **The table of contents now follows your reading position.** While it is open, scrolling a Markdown article in Rich or Source mode highlights the corresponding heading, including when multiple headings share the same title.
