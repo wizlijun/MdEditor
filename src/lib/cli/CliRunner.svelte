@@ -104,10 +104,11 @@
       return
     }
 
-    // File-less subcommands (e.g. `notemd roam-day --date …`) skip the tab
-    // build entirely: there's no file to stat/read.
-    const built = inputPath ? await buildVirtualTab(inputPath, finish, payload.global.json) : null
-    if (inputPath && !built) return
+    // A path can be a directory or binary source owned by the plugin. Entries
+    // with tab context disabled forward the path without loading a document.
+    const needsTab = inputPath && entry?.requires_tab_context !== false
+    const built = needsTab ? await buildVirtualTab(inputPath, finish, payload.global.json) : null
+    if (needsTab && !built) return
 
     // For commands requiring rendered HTML, bake the content. Never runs
     // without a tab — a file-less command cannot request tab context.
@@ -140,8 +141,8 @@
 
     const pluginSettings = getPluginScopedAll(manifest.id)
 
-    // Built tabs carry the real snapshot; file-less commands pass a coherent
-    // empty shell (the backend doesn't read tab fields when there's no file).
+    // Commands without a tab pass an empty snapshot; their path arguments
+    // still reach the backend through context.cli.args below.
     const snap = built
       ? {
           path: built.tab.filePath,

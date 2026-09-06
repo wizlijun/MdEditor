@@ -26,4 +26,15 @@ describe('meetings manifest', () => {
     expect(manifest.capabilities).not.toContain('settings')
     expect(manifest.description).toContain('configurable Vault directory')
   })
+
+  it('exposes one-command incremental sync without requiring a document', () => {
+    const cli = manifest.contributes.cli.find((entry) => entry.subcommand === 'meetings-sync')!
+    expect(cli.command).toBe('sync')
+    expect(cli.requires_tab_context).toBe(false)
+    expect(cli.args).toEqual([
+      expect.objectContaining({ name: 'source', type: 'path', required: false }),
+    ])
+    expect(cli.flags.map((flag) => flag.long)).toEqual(['--dry-run', '--user', '--timezone'])
+    expect(manifest.activation.events).toContain('onCli:meetings-sync')
+  })
 })

@@ -172,7 +172,7 @@ impl MeetingsPlugin {
         Ok(json!({"meetings": self.service()?.library_list()?}))
     }
 
-    fn cli_import(&self, context: &Value) -> Result<Value, String> {
+    fn cli_import(&self, context: &Value, mode: MigrationMode) -> Result<Value, String> {
         let source = cli_str(context, "source")
             .or_else(|| default_hemory_source_from_home(home_dir().as_deref()))
             .ok_or("no Hemory Vault found under ~/.hemory/vault; pass an explicit source path")?;
@@ -180,11 +180,7 @@ impl MeetingsPlugin {
             source: PathBuf::from(source),
             user: cli_str(context, "user"),
             timezone: cli_str(context, "timezone"),
-            mode: if cli_flag(context, "full") {
-                MigrationMode::Full
-            } else {
-                MigrationMode::Incremental
-            },
+            mode,
         };
         let service = self.service()?;
         let report = if cli_flag(context, "dry-run") {
@@ -202,11 +198,12 @@ fn cli_report_outcome(report: &MigrationReport) -> Result<Value, String> {
     Ok(json!({
         "__notemd_cli_result": {
             "exit_code": if clean { 0 } else { 4 },
-            "message": if clean {
-                "Hemory migration completed"
-            } else {
-                "Hemory migration completed with conflicts or blocked items"
-            },
+            "message": format!(
+                "Hemory {}: {} created, {} updated, {} skipped, {} conflicts, {} blocked, {} source missing; {} committed",
+                if report.dry_run { "dry-run" } else { "sync completed" },
+                report.create, report.update, report.skip, report.conflict, report.blocked,
+                report.source_missing, report.committed,
+            ),
             "data": value,
         }
     }))
@@ -391,7 +388,15 @@ impl sdk::NotemdPlugin for MeetingsPlugin {
         params: &proto::ExecuteCommandParams,
     ) -> Result<Value, String> {
         match params.command.as_str() {
-            "meetings-import-hemory" | "import-hemory" => self.cli_import(&params.context),
+            "meetings-sync" | "sync" => self.cli_import(&params.context, MigrationMode::Incremental),
+            "meetings-import-hemory" | "import-hemory" => self.cli_import(
+                &params.context,
+                if cli_flag(&params.context, "full") {
+                    MigrationMode::Full
+                } else {
+                    MigrationMode::Incremental
+                },
+            ),
             other => Err(format!("unknown command '{other}'")),
         }
     }

@@ -16,7 +16,8 @@
   "activation": {
     "events": [
       "onCommand:open",
-      "onCli:meetings-import-hemory"
+      "onCli:meetings-import-hemory",
+      "onCli:meetings-sync"
     ]
   },
   "contributes": {
@@ -63,6 +64,37 @@
             "long": "--dry-run",
             "type": "boolean",
             "help": "Plan the migration without writing to the vault"
+          },
+          {
+            "long": "--user",
+            "type": "string",
+            "help": "Hemory user id (required when more than one is found)"
+          },
+          {
+            "long": "--timezone",
+            "type": "string",
+            "help": "IANA timezone for historical timestamps without an offset"
+          }
+        ],
+        "requires_tab_context": false
+      },
+      {
+        "subcommand": "meetings-sync",
+        "command": "sync",
+        "summary": "Incrementally sync new and changed Hemory meetings into the configured Vault",
+        "args": [
+          {
+            "name": "source",
+            "type": "path",
+            "required": false,
+            "help": "Hemory root, user root, or conversation(s) directory (defaults to the first Vault under ~/.hemory/vault)"
+          }
+        ],
+        "flags": [
+          {
+            "long": "--dry-run",
+            "type": "boolean",
+            "help": "Preview incremental changes without writing to the vault"
           },
           {
             "long": "--user",
