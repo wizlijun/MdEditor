@@ -357,9 +357,17 @@ impl sdk::NotemdPlugin for MeetingsPlugin {
     fn activate(
         &mut self,
         host: &sdk::Host,
-        _params: &proto::ActivateParams,
+        params: &proto::ActivateParams,
     ) -> Result<(), String> {
         let seeded = shared_config_vault();
+        if params.event.starts_with("onCli:") {
+            // CLI has shared config and may close stdin without answering host requests.
+            // Holding Host in a pending lookup would prevent SDK shutdown after EOF.
+            let mut state = self.inner.lock().unwrap();
+            state.vault = seeded;
+            state.vault_checked = true;
+            return Ok(());
+        }
         if let Some(vault) = &seeded {
             self.inner.lock().unwrap().vault = Some(vault.clone());
         }

@@ -6,7 +6,7 @@ use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::mpsc::{self, Receiver};
-use std::time::{Duration, SystemTime};
+use std::time::{Duration, Instant, SystemTime};
 
 const FIRST: &str = "20260403_173300";
 const SECOND: &str = "20260404_173300";
@@ -84,10 +84,12 @@ impl Fixture {
                 ["ok"],
             true
         );
-        rpc.request(
+        let response = rpc.request(
             "command.execute",
             json!({"command": command, "context": context}),
-        )
+        );
+        rpc.finish();
+        response
     }
 
     fn run(&self, command: &str, context: Value, exit_code: i32) -> MigrationReport {
@@ -102,9 +104,8 @@ impl Fixture {
 
 struct Backend {
     child: Child,
-    stdin: ChildStdin,
+    stdin: Option<ChildStdin>,
     lines: Receiver<String>,
-    vault: PathBuf,
     next_id: u64,
 }
 
@@ -131,16 +132,32 @@ impl Backend {
         });
         Self {
             child,
-            stdin,
+            stdin: Some(stdin),
             lines,
-            vault: fixture.vault.clone(),
             next_id: 100,
         }
     }
 
     fn send(&mut self, value: Value) {
-        writeln!(self.stdin, "{value}").unwrap();
-        self.stdin.flush().unwrap();
+        let stdin = self.stdin.as_mut().expect("plugin stdin is open");
+        writeln!(stdin, "{value}").unwrap();
+        stdin.flush().unwrap();
+    }
+
+    fn finish(&mut self) {
+        drop(self.stdin.take());
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            if let Some(status) = self.child.try_wait().unwrap() {
+                assert!(status.success(), "plugin exited unsuccessfully: {status}");
+                return;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "plugin did not exit naturally within 2 seconds after stdin EOF"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
     }
 
     fn request(&mut self, method: &str, params: Value) -> Value {
@@ -154,10 +171,8 @@ impl Backend {
                 .expect("plugin did not respond within 10 seconds");
             let message: Value = serde_json::from_str(&line).expect("JSON-RPC stdout line");
             if message["method"] == "host.vault.info" {
-                self.send(json!({
-                    "jsonrpc": "2.0", "id": message["id"],
-                    "result": {"root": self.vault},
-                }));
+                // CLI must work and terminate without GUI host requests being answered.
+                continue;
             } else if message.get("method").is_none() && message["id"] == id {
                 return message;
             } else {
@@ -178,6 +193,22 @@ impl Drop for Backend {
         let _ = self.child.kill();
         let _ = self.child.wait();
     }
+}
+
+#[test]
+fn cli_backend_exits_after_stdin_closes_on_success() {
+    let fixture = Fixture::new();
+    let report = fixture.run("sync", fixture.context(json!({})), 0);
+    assert_eq!(report.committed, 1);
+}
+
+#[test]
+fn cli_backend_exits_after_stdin_closes_without_a_configured_vault() {
+    let fixture = Fixture::new();
+    fs::write(&fixture.config, "{}").unwrap();
+    let response = fixture.execute("sync", fixture.context(json!({})));
+    assert_eq!(response["error"]["code"], -32000);
+    assert_eq!(response["error"]["message"], "no vault configured");
 }
 
 fn snapshot(root: &Path) -> BTreeMap<PathBuf, (SystemTime, Option<Vec<u8>>)> {
