@@ -2,10 +2,10 @@
   "manifest_version": 2,
   "id": "notemd.meetings",
   "name": "Meetings",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "kind": "native",
   "engines": {
-    "notemd": ">=6.903.2"
+    "notemd": ">=6.906.2"
   },
   "description": "Archive speaker-attributed, time-coded meeting transcripts in a configurable Vault directory and migrate existing Hemory conversations without copying audio.",
   "binary": {

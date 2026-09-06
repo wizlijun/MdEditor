@@ -7,6 +7,14 @@ For the full commit history, see the git log.
 
 ## Unreleased
 
+### Added
+
+- **Sync meetings with one command.** Meetings 1.0.3 adds `notemd meetings-sync` to incrementally archive new or changed Hemory transcripts into the configured Vault. It supports an optional source directory, `--user`, `--timezone`, `--dry-run` and JSON reports. Repeated runs skip unchanged meetings; local edits are protected from overwrite. Update note.md to 6.906.2 first, then update Meetings in the plugin marketplace and restart.
+
+### Fixed
+
+- **Plugin CLI source directories reach the plugin correctly.** Commands that do not request document context no longer try to open their path argument as a text document. This fixes explicit Hemory source paths while preserving PDF file loading and rendering.
+
 ## v6.906.1 — 2026-09-06
 
 ### Changed
